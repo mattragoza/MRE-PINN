@@ -1,0 +1,25 @@
+name: MRE-PINN
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - numpy
+  - scipy
+  - scikit-image
+  - pandas
+  - nvidia::cudatoolkit=10.2
+  - pytorch::pytorch
+  - jax
+  - flax
+  - optax
+  - deepxde
+  - fenics-dolfinx
+  - petsc=*=complex*
+  - matplotlib
+  - seaborn
+  - notebook
+  - ipykernel
+  - fire
