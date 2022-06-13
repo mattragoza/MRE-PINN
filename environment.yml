@@ -22,4 +22,5 @@ dependencies:
   - seaborn
   - notebook
   - ipykernel
+  - tqdm
   - fire
