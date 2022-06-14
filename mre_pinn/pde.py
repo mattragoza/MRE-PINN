@@ -1,3 +1,21 @@
+import torch
+import deepxde
+
+
+class HelmholtzPDE(object):
+
+	def __init__(self, rho, omega):
+		self.rho = rho
+		self.omega = omega
+
+	def __call__(self, x, outputs):
+		u, mu = torch.split(outputs, [2, 1], dim=1)
+		ux_xx = deepxde.grad.hessian(u, x, component=0, i=0, j=0)
+		ux_yy = deepxde.grad.hessian(u, x, component=0, i=1, j=1)
+		uy_xx = deepxde.grad.hessian(u, x, component=1, i=0, j=0)
+		uy_yy = deepxde.grad.hessian(u, x, component=1, i=1, j=1)
+		laplace_u = torch.cat([ux_xx + ux_yy, uy_xx + uy_yy], dim=1)
+		return mu * laplace_u + self.rho * self.omega**2 * u
 
 
 def lvwe(x, u, mu, lam, rho, omega):

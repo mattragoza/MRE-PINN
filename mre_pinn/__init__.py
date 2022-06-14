@@ -2,4 +2,4 @@ import sys
 
 print(f'Loading {__file__}', file=sys.stderr)
 
-from . import data, training, pde, visual
+from . import data, model, pde, visual
