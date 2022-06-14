@@ -8,15 +8,20 @@ def as_tensor(a):
     return deepxde.backend.as_tensor(a, dtype=dtype)
 
 
-def nd_coords(shape):
-    dims = [np.arange(d) for d in shape]
+def nd_coords(shape, resolution):
+    resolution = np.broadcast_to(resolution, len(shape))
+    dims = [
+        np.arange(d) * r for d, r in zip(shape, resolution)
+    ]
     coords = np.meshgrid(*dims)
-    return np.dstack(coords).reshape(-1, len(dims))
+    coords = np.dstack(coords).reshape(-1, len(dims))
+    center = np.mean(coords, axis=0, keepdims=True)
+    return coords - center
 
 
 class ImagePointSet(deepxde.icbc.PointSetBC):
 
-    def __init__(self, image, ndim=2, component=0):
+    def __init__(self, image, resolution, ndim=2, component=0):
 
         if isinstance(image, str):
             image = np.load(image)
@@ -25,7 +30,8 @@ class ImagePointSet(deepxde.icbc.PointSetBC):
         self.component = component
         self.n_components = (image.ndim - ndim)
 
-        self.points = nd_coords(image.shape[:ndim]).astype(deepxde.config.real(np))
+        dtype = deepxde.config.real(np)
+        self.points = nd_coords(image.shape[:ndim], resolution).astype(dtype)
         self.values = as_tensor(image.reshape(-1, *image.shape[ndim:]))
 
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
