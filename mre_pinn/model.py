@@ -19,21 +19,23 @@ class ComplexFFN(torch.nn.ModuleList):
             is_first_layer = (i == 0)
             is_last_layer = (i == n_layers - 1)
             linear = torch.nn.Linear(
-                n_input if is_first_layer else n_hidden,
+                n_input,
                 n_output*2 if is_last_layer else n_hidden
             )
+            n_input += n_hidden
             modules.append(linear)
     
         self.activ_fn = activ_fn
         self.w0 = w0
         super().__init__(modules)
-        
+
     def forward(self, input):
         
         for i, module in enumerate(self):
             w = self.w0 if i == 0 else 1
             if i < len(self) - 1:
-                input = self.activ_fn(w*module(input))
+                output = self.activ_fn(w*module(input))
+                input = torch.cat([input, output], dim=1)
             else:
                 output = as_complex(module(input))
         return output
