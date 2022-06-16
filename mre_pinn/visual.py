@@ -133,23 +133,25 @@ def elast_color_map(n_colors=255):
     )
 
 
-def plot_image_2d(a, dims, ax, **kwargs):
-    extent = (0, dims[0], 0, dims[1])
-    im = ax.imshow(a, extent=extent, resample=False, **kwargs)
-    #ax.set_xlabel('x')
-    #ax.set_ylabel('y')
+def plot_image_2d(a, resolution, ax, xlabel=None, ylabel=None, **kwargs):
+    n_x, n_y = a.shape
+    extent = (0, n_x * resolution, 0, n_y * resolution)
+    ax.autoscale(enable=True, tight=True)
+    im = ax.imshow(a.T, origin='lower', extent=extent, **kwargs)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     return im
 
 
-def plot_points_2d(x, u, dims, ax, **kwargs):
+def plot_points_2d(x, u, dims, ax, xlabel=None, ylabel=None, **kwargs):
     sc = ax.scatter(x[:,0], x[:,1], c=u, marker='o', s=0.2, **kwargs)
     ax.set_aspect(dims[1] / dims[0])
-    #ax.set_xlabel('x')
-    #ax.set_ylabel('y')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     return sc
 
 
-def plot_colorbar(obj, label, ax):
+def plot_colorbar(obj, ax, label=None):
     plt.colorbar(obj, cax=ax)
     ax.yaxis.set_ticks_position('left')
     ax.yaxis.set_label_position('left')
