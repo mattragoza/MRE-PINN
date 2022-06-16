@@ -6,48 +6,6 @@ import mpl_toolkits.axes_grid1
 import matplotlib.widgets
 
 
-def wave_color_map(n_colors=255):
-    '''
-    Create a colormap for MRE wave images
-    from yellow, red, black, blue, to cyan.
-    '''
-    cyan   = (0, 1, 1)
-    blue   = (0, 0, 1)
-    black  = (0, 0, 0)
-    red    = (1, 0, 0)
-    yellow = (1, 1, 0)
-
-    colors = [cyan, blue, black, red, yellow]
-
-    return mpl.colors.LinearSegmentedColormap.from_list(
-        name='wave', colors=colors, N=n_colors
-    )
-
-
-def elast_color_map(n_colors=255):
-    '''
-    Create a colormap for MRE elastrograms
-    from dark, blue, cyan, green, yellow, to red.
-    '''
-    p = 0.0
-    c = 0.9 #0.6
-    y = 0.9
-    g = 0.8
-
-    dark   = (p, 0, p)
-    blue   = (0, 0, 1)
-    cyan   = (0, c, 1)
-    green  = (0, g, 0)
-    yellow = (1, y, 0)
-    red    = (1, 0, 0)
-
-    colors = [dark, blue, cyan, green, yellow, red]
-
-    return mpl.colors.LinearSegmentedColormap.from_list(
-        name='elast', colors=colors, N=n_colors
-    )
-
-
 class Player(FuncAnimation):
 
     def __init__(
@@ -131,3 +89,68 @@ class Player(FuncAnimation):
 
     def update(self,i):
         self.slider.set_val(i)
+
+
+def wave_color_map(n_colors=255):
+    '''
+    Create a colormap for MRE wave images
+    from yellow, red, black, blue, to cyan.
+    '''
+    cyan   = (0, 1, 1)
+    blue   = (0, 0, 1)
+    black  = (0, 0, 0)
+    red    = (1, 0, 0)
+    yellow = (1, 1, 0)
+
+    colors = [cyan, blue, black, red, yellow]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='wave', colors=colors, N=n_colors
+    )
+
+
+def elast_color_map(n_colors=255):
+    '''
+    Create a colormap for MRE elastrograms
+    from dark, blue, cyan, green, yellow, to red.
+    '''
+    p = 0.0
+    c = 0.9 #0.6
+    y = 0.9
+    g = 0.8
+
+    dark   = (p, 0, p)
+    blue   = (0, 0, 1)
+    cyan   = (0, c, 1)
+    green  = (0, g, 0)
+    yellow = (1, y, 0)
+    red    = (1, 0, 0)
+
+    colors = [dark, blue, cyan, green, yellow, red]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='elast', colors=colors, N=n_colors
+    )
+
+
+def plot_image_2d(a, dims, ax, **kwargs):
+    extent = (0, dims[0], 0, dims[1])
+    im = ax.imshow(a, extent=extent, resample=False, **kwargs)
+    #ax.set_xlabel('x')
+    #ax.set_ylabel('y')
+    return im
+
+
+def plot_points_2d(x, u, dims, ax, **kwargs):
+    sc = ax.scatter(x[:,0], x[:,1], c=u, marker='o', s=0.2, **kwargs)
+    ax.set_aspect(dims[1] / dims[0])
+    #ax.set_xlabel('x')
+    #ax.set_ylabel('y')
+    return sc
+
+
+def plot_colorbar(obj, label, ax):
+    plt.colorbar(obj, cax=ax)
+    ax.yaxis.set_ticks_position('left')
+    ax.yaxis.set_label_position('left')
+    ax.set_ylabel(label)
