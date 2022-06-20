@@ -2,8 +2,72 @@ import matplotlib as mpl
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-import mpl_toolkits.axes_grid1
 import matplotlib.widgets
+import mpl_toolkits.axes_grid1
+import xarray as xr
+
+
+class NDArrayViewer(object):
+    
+    def __init__(self, array, labels=None, dpi=25, **kwargs):
+
+        if isinstance(array, xr.DataArray) and labels is None:
+            labels = array.dims
+
+        n_x, n_y  = array.shape[-2:]
+        ax_height = n_y / dpi
+        ax_width  = n_x / dpi
+        bar_width = 1 / 4
+
+        assert array.ndim >= 2
+        assert len(labels) == array.ndim
+
+        self.fig, self.axes = subplot_grid(
+            n_rows=1,
+            n_cols=array.ndim,
+            ax_height=ax_height,
+            ax_width=[bar_width] * (array.ndim - 2) + [ax_width, bar_width],
+            space=[0.3, 0.6],
+            pad=[0.9, 1.0, 0.7, 0.4]
+        )
+
+        self.array = array
+        self.index = (0,) * (array.ndim - 2)
+
+        # create index sliders
+        self.sliders = []
+        for i in range(array.ndim - 2):
+            if isinstance(array, xr.DataArray):
+                values = array.coords[array.dims[i]].to_numpy()
+            else:
+                values = np.arange(array.shape[i])
+            slider = plot_slider(
+                self.axes[0,i],
+                update=self.index_updater(i),
+                values=values,
+                label=labels[i]
+            )
+            self.sliders.append(slider)
+
+        # create image and color bar
+        self.image = plot_image_2d(
+            self.axes[0,-2],
+            self.array[self.index],
+            resolution=1,
+            xlabel=labels[-2],
+            ylabel=labels[-1],
+            **kwargs
+        )
+        self.cbar = plot_colorbar(self.axes[0,-1], self.image)
+
+    def index_updater(self, i):
+        def update(new_value):
+            curr_index = list(self.index)
+            curr_index[i] = new_value
+            self.index = tuple(curr_index)
+            self.image.set_array(self.array[self.index].T)
+            self.fig.canvas.draw()
+        return update
 
 
 class Player(FuncAnimation):
@@ -133,7 +197,40 @@ def elast_color_map(n_colors=255):
     )
 
 
-def plot_image_2d(a, resolution, ax, xlabel=None, ylabel=None, **kwargs):
+def as_iterable(x, length=1):
+    if not isinstance(x, (list, tuple)):
+        return [x] * length
+    return x
+
+
+def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0, pad=0):
+    
+    ax_height = as_iterable(ax_height, n_rows)
+    ax_width = as_iterable(ax_width, n_cols)
+    hspace, wspace = as_iterable(space, 2)
+    lpad, rpad, bpad, tpad = as_iterable(pad, 4)
+
+    fig_height = sum(ax_height) + (n_rows - 1) * hspace + bpad + tpad
+    fig_width = sum(ax_width) + (n_cols - 1) * wspace + lpad + rpad
+
+    return plt.subplots(
+        n_rows, n_cols,
+        squeeze=False,
+        figsize=(fig_width, fig_height),
+        gridspec_kw=dict(
+            height_ratios=ax_height,
+            width_ratios=ax_width,
+            hspace=hspace,
+            wspace=wspace,
+            left=lpad/fig_width,
+            right=1 - rpad/fig_width,
+            bottom=bpad/fig_height,
+            top=1 - tpad/fig_height
+        )
+    )
+
+
+def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
     n_x, n_y = a.shape
     extent = (0, n_x * resolution, 0, n_y * resolution)
     ax.autoscale(enable=True, tight=True)
@@ -143,7 +240,7 @@ def plot_image_2d(a, resolution, ax, xlabel=None, ylabel=None, **kwargs):
     return im
 
 
-def plot_points_2d(x, u, dims, ax, xlabel=None, ylabel=None, **kwargs):
+def plot_points_2d(ax, x, u, dims, xlabel=None, ylabel=None, **kwargs):
     sc = ax.scatter(x[:,0], x[:,1], c=u, marker='o', s=0.2, **kwargs)
     ax.set_aspect(dims[1] / dims[0])
     ax.set_xlabel(xlabel)
@@ -151,8 +248,48 @@ def plot_points_2d(x, u, dims, ax, xlabel=None, ylabel=None, **kwargs):
     return sc
 
 
-def plot_colorbar(obj, ax, label=None):
+def plot_colorbar(ax, obj, label=None, location='left'):
     plt.colorbar(obj, cax=ax)
-    ax.yaxis.set_ticks_position('left')
-    ax.yaxis.set_label_position('left')
+    #ax.yaxis.set_ticks_position('left')
+    #ax.yaxis.set_label_position('left')
     ax.set_ylabel(label)
+
+
+def plot_slider(ax, update, values=None, label=None, **kwargs):
+
+    n_values = len(values)
+    slider = matplotlib.widgets.Slider(
+        ax,
+        label=None,
+        valmin=0,
+        valmax=n_values - 1,
+        valstep=1,
+        orientation='vertical',
+        handle_style=dict(size=20)
+    )
+    slider.on_changed(update)
+
+    #slider.track.set_xy((0, 0))
+    #slider.track.set_width(1.0)
+    #slider.poly.set_visible(False)
+    #slider.hline.set_visible(False)
+
+    slider.label.set_y(1.05)
+    slider.valtext.set_y(-0.05)
+    slider.valtext.set_visible(False)
+    slider._handle.set_marker('s')
+    slider._handle.set_zorder(10)
+
+    ax.set_axis_on()
+    ax.set_xticks([])
+
+    #ax.hlines(range(n_values), 0.25, 0.75, color='0.0', lw=0.7, zorder=9)
+    ax.set_yticks(range(n_values))
+    ax.set_yticklabels(values)
+    #ax.set_xlim(0, 1)
+
+    ax.set_ylabel(label)
+    for s in ax.spines:
+        ax.spines[s].set_visible(False)
+
+    return slider
