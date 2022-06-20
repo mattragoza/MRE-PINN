@@ -4,41 +4,66 @@ import torch
 import deepxde
 
 
-def as_tensor(a):
-    dtype = torch.complex128 #deepxde.config.real(deepxde.backend.lib)
+def as_tensor(a, complex=True):
+    if complex:
+        dtype = torch.complex128
+    else:
+        dtype = deepxde.config.real(deepxde.backend.lib)
     return deepxde.backend.as_tensor(a, dtype=dtype)
 
 
-def nd_coords(shape, resolution):
+def nd_coords(coords, center=False):
+    coords = np.meshgrid(*coords, indexing='ij')
+    coords = np.stack(coords, axis=-1).reshape(-1, len(coords))
+    if center is True:
+        coords -= np.mean(coords, axis=0, keepdims=True)
+    return coords
+
+
+def nd_coords_from_shape(shape, resolution=1, center=False):
     resolution = np.broadcast_to(resolution, len(shape))
-    dims = [
+    coords = [
         np.arange(d) * r for d, r in zip(shape, resolution)
     ]
-    coords = np.meshgrid(*dims)
-    coords = np.dstack(coords).reshape(-1, len(dims))
-    center = np.mean(coords, axis=0, keepdims=True)
-    return coords - center
+    return nd_coords(coords, center)
 
 
-class ImagePointSet(deepxde.icbc.PointSetBC):
+class NDArrayBC(deepxde.icbc.PointSetBC):
 
-    def __init__(self, image, resolution, ndim=2, component=0):
+    def __init__(
+        self, array, resolution=1, component=0, batch_size=None, shuffle=True
+    ):
+        try: # assume it's an xarray with metadata
+            coords = list(array.coords.values())
+            points = nd_coords(coords[:-1])
+            array = np.array(array)
 
-        if isinstance(image, str):
-            image = np.load(image)
+        except AttributeError:
+            points = nd_coords_from_shape(
+                array.shape[:-1], resolution
+            )
 
-        self.ndim = ndim
+        self.points = points.astype(deepxde.config.real(np))
+        self.values = as_tensor(array).reshape(-1, array.shape[-1])
         self.component = component
-        self.n_components = (image.ndim - ndim)
 
-        dtype = deepxde.config.real(np)
-        self.points = nd_coords(image.shape[:ndim], resolution).astype(dtype)
-        self.values = as_tensor(image.reshape(-1, *image.shape[ndim:]))
+        # batch iterator and state
+        self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle)
+        self.batch_size = batch_size
+        self.batch_indices = None
+
+    def __len__(self):
+        return self.points.shape[0]
+
+    def collocation_points(self, X):
+        self.batch_indices = self.batch_sampler.get_next(self.batch_size)
+        return self.points[self.batch_indices]
 
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
-        comp_beg = self.component
-        comp_end = self.component + self.n_components
-        return outputs[beg:end,comp_beg:comp_end] - self.values
+        return (
+            outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
+            self.values[self.batch_indices]
+        )
 
 
 def load_mat_data(mat_file, verbose=False):

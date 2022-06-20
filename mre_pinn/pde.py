@@ -2,20 +2,25 @@ import torch
 import deepxde
 
 
+def laplacian(u, x, dim=0):
+    components = []
+    for i in range(u.shape[1]):
+        component = 0
+        for j in range(dim, x.shape[1]):
+            component += deepxde.grad.hessian(u, x, component=i, i=j, j=j)
+        components.append(component)
+    return torch.cat(components, dim=1)
+
+
 class HelmholtzPDE(object):
 
-    def __init__(self, rho, omega):
+    def __init__(self, rho=1.0):
         self.rho = rho
-        self.omega = omega
 
     def __call__(self, x, outputs):
-        u, mu = torch.split(outputs, [2, 1], dim=1)
-        ux_xx = deepxde.grad.hessian(u, x, component=0, i=0, j=0)
-        ux_yy = deepxde.grad.hessian(u, x, component=0, i=1, j=1)
-        uy_xx = deepxde.grad.hessian(u, x, component=1, i=0, j=0)
-        uy_yy = deepxde.grad.hessian(u, x, component=1, i=1, j=1)
-        laplace_u = torch.cat([ux_xx + ux_yy, uy_xx + uy_yy], dim=1)
-        return mu * laplace_u + self.rho * self.omega**2 * u
+        u, mu = torch.split(outputs, [3, 1], dim=1)
+        omega, laplace_u = x[:,:1], laplacian(u, x, dim=1)
+        return mu * laplace_u + self.rho * omega**2 * u
 
 
 def lvwe(x, u, mu, lam, rho, omega):

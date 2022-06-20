@@ -30,6 +30,8 @@ class ComplexFFN(torch.nn.ModuleList):
         super().__init__(modules)
 
     def forward(self, input):
+
+        input = (input - self.input_loc) / self.input_scale
         
         for i, module in enumerate(self):
             w = self.w0 if i == 0 else 1
@@ -37,10 +39,14 @@ class ComplexFFN(torch.nn.ModuleList):
                 output = self.activ_fn(w*module(input))
                 input = torch.cat([input, output], dim=1)
             else:
-                output = as_complex(module(input))
-        return output
+                output = module(input)
 
-    def init_weights(self, c=6, input_scale=1, output_scale=1, output_loc=0):
+        output = output * self.output_scale + self.output_loc
+        return as_complex(output)
+
+    def init_weights(
+        self, c=6, input_loc=0, input_scale=1, output_loc=0, output_scale=1
+    ):
         for i, module in enumerate(self.children()):
             n_input = module.weight.shape[-1]
 
@@ -52,18 +58,19 @@ class ComplexFFN(torch.nn.ModuleList):
             with torch.no_grad():
                 module.weight.uniform_(-w_std, w_std)
 
-                if i == 0: # map from centered input to [-1, 1]
-                    module.weight /= torch.as_tensor(
-                        input_scale, device=module.weight.device
-                    ).unsqueeze(0)
+        self.input_scale = torch.as_tensor(
+            input_scale, device=module.weight.device
+        ).unsqueeze(0)
+        self.input_loc = torch.as_tensor(
+            input_loc, device=module.bias.device
+        ).unsqueeze(0)
 
-                if i == len(self) - 1: # map from standard normal to output
-                    module.weight *= torch.as_tensor(
-                        output_scale, device=module.weight.device
-                    ).unsqueeze(1)
-                    module.bias[...] = torch.as_tensor(
-                        output_loc, device=module.bias.device
-                    )
+        self.output_scale = torch.as_tensor(
+            output_scale, device=module.weight.device
+        ).unsqueeze(0)
+        self.output_loc = torch.as_tensor(
+            output_loc, device=module.bias.device
+        ).unsqueeze(0)
 
 
 class Parallel(torch.nn.ModuleList):
