@@ -5,6 +5,7 @@ from matplotlib.animation import FuncAnimation
 import matplotlib.widgets
 import mpl_toolkits.axes_grid1
 import xarray as xr
+import deepxde
 
 
 class NDArrayViewer(object):
@@ -68,6 +69,49 @@ class NDArrayViewer(object):
             self.image.set_array(self.array[self.index].T)
             self.fig.canvas.draw()
         return update
+
+
+class TrainingPlot(deepxde.display.TrainingDisplay):
+
+    def __init__(self):
+        self.initialized = False
+
+    def initialize(self):
+
+        self.fig, self.axes = subplot_grid(
+            n_rows=1,
+            n_cols=1,
+            ax_height=4,
+            ax_width=4,
+            space=0.3,
+            pad=[0.9, 0.4, 0.7, 0.4]
+        )
+
+        # training loss plot
+        labels = ['PDE', 'data']
+        self.lines = [
+            self.axes[0,0].plot([], [], label=labels[i])[0] for i in range(2)
+        ]
+        self.axes[0,0].legend(frameon=False)
+        self.axes[0,0].grid(linestyle=':')
+        self.axes[0,0].set_xlabel('iteration')
+        self.axes[0,0].set_ylabel('loss')
+        self.initialized = True
+
+    def __call__(self, train_state):
+
+        if not self.initialized:
+            self.initialize()
+        
+        for i, line in enumerate(self.lines):
+            new_x = train_state.step
+            new_y = train_state.loss_train[i]
+            line.set_xdata(np.append(line.get_xdata(), new_x))
+            line.set_ydata(np.append(line.get_ydata(), new_y))
+            
+        self.axes[0,0].relim()
+        self.axes[0,0].autoscale_view()
+        self.fig.canvas.draw()
 
 
 class Player(FuncAnimation):

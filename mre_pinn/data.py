@@ -34,7 +34,7 @@ class NDArrayBC(deepxde.icbc.PointSetBC):
         self, array, resolution=1, component=0, batch_size=None, shuffle=True
     ):
         try: # assume it's an xarray with metadata
-            coords = list(array.coords.values())
+            coords = [array.coords[d] for d in array.dims]
             points = nd_coords(coords[:-1])
             array = np.array(array)
 

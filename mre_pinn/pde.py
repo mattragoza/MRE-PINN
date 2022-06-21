@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import deepxde
 
@@ -14,13 +15,14 @@ def laplacian(u, x, dim=0):
 
 class HelmholtzPDE(object):
 
-    def __init__(self, rho=1.0):
+    def __init__(self, ndim=3, rho=1.0):
+        self.ndim = ndim
         self.rho = rho
 
     def __call__(self, x, outputs):
-        u, mu = torch.split(outputs, [3, 1], dim=1)
+        u, mu = torch.split(outputs, [self.ndim, 1], dim=1)
         omega, laplace_u = x[:,:1], laplacian(u, x, dim=1)
-        return mu * laplace_u + self.rho * omega**2 * u
+        return mu * laplace_u + self.rho * (2*np.pi*omega)**2 * u
 
 
 def lvwe(x, u, mu, lam, rho, omega):
