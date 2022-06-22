@@ -10,11 +10,26 @@ import deepxde
 
 class NDArrayViewer(object):
     
-    def __init__(self, array, labels=None, dpi=25, **kwargs):
+    def __init__(self, array, x='x', y='y', labels=None, dpi=25, **kwargs):
 
         if isinstance(array, xr.DataArray) and labels is None:
             labels = array.dims
+        labels = list(labels)
 
+        assert x in labels
+        assert y in labels
+
+        # permute so that x and y are at the end
+        permute = list(range(array.ndim))
+        x_dim = labels.index(x)
+        permute.append(permute.pop(x_dim))
+        labels.append(labels.pop(x_dim))
+        y_dim = labels.index(y)
+        permute.append(permute.pop(y_dim))
+        labels.append(labels.pop(y_dim))
+        array = np.transpose(array, permute)
+
+        # set up grid of subplots
         n_x, n_y  = array.shape[-2:]
         ax_height = n_y / dpi
         ax_width  = n_x / dpi
@@ -39,7 +54,7 @@ class NDArrayViewer(object):
         self.sliders = []
         for i in range(array.ndim - 2):
             if isinstance(array, xr.DataArray):
-                values = array.coords[array.dims[i]].to_numpy()
+                values = array.coords[labels[i]].to_numpy()
             else:
                 values = np.arange(array.shape[i])
             slider = plot_slider(
@@ -96,6 +111,7 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
         self.axes[0,0].grid(linestyle=':')
         self.axes[0,0].set_xlabel('iteration')
         self.axes[0,0].set_ylabel('loss')
+        self.axes[0,0].set_yscale('log')
         self.initialized = True
 
     def __call__(self, train_state):
