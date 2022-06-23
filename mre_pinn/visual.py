@@ -22,12 +22,15 @@ class NDArrayViewer(object):
 
         # permute so that x and y are at the end
         permute = list(range(array.ndim))
+
         x_dim = labels.index(x)
         permute.append(permute.pop(x_dim))
         labels.append(labels.pop(x_dim))
+
         y_dim = labels.index(y)
         permute.append(permute.pop(y_dim))
         labels.append(labels.pop(y_dim))
+
         array = np.transpose(array, permute)
 
         # set up grid of subplots
@@ -89,30 +92,39 @@ class NDArrayViewer(object):
 
 class TrainingPlot(deepxde.display.TrainingDisplay):
 
-    def __init__(self):
+    def __init__(self, losses, metrics):
+        self.losses = losses
+        self.metrics = metrics
         self.initialized = False
 
     def initialize(self):
 
         self.fig, self.axes = subplot_grid(
             n_rows=1,
-            n_cols=1,
-            ax_height=4,
-            ax_width=4,
+            n_cols=2,
+            ax_height=3,
+            ax_width=3,
             space=0.3,
             pad=[1.2, 0.4, 0.7, 0.4]
         )
 
-        # training loss plot
-        labels = ['PDE', 'data']
-        self.lines = [
-            self.axes[0,0].plot([], [], label=labels[i])[0] for i in range(2)
+        # training loss and metric plots
+        self.loss_lines = [
+            self.axes[0,0].plot([], [], label=l)[0] for l in self.losses
         ]
-        self.axes[0,0].legend(frameon=False)
-        self.axes[0,0].grid(linestyle=':')
-        self.axes[0,0].set_xlabel('iteration')
         self.axes[0,0].set_ylabel('loss')
-        self.axes[0,0].set_yscale('log')
+
+        self.metric_lines = [
+            self.axes[0,1].plot([], [], label=m)[0] for m in self.metrics
+        ]
+        self.axes[0,1].set_ylabel('metric')
+
+        for ax in self.axes.flatten():
+            ax.set_xlabel('iteration')
+            ax.set_yscale('log')
+            ax.grid(linestyle=':')
+            ax.legend(frameon=False)
+
         self.initialized = True
 
     def __call__(self, train_state):
@@ -120,14 +132,22 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
         if not self.initialized:
             self.initialize()
         
-        for i, line in enumerate(self.lines):
+        for i, line in enumerate(self.loss_lines):
             new_x = train_state.step
-            new_y = train_state.loss_train[i]
+            new_y = train_state.loss_test[i]
             line.set_xdata(np.append(line.get_xdata(), new_x))
             line.set_ydata(np.append(line.get_ydata(), new_y))
-            
-        self.axes[0,0].relim()
-        self.axes[0,0].autoscale_view()
+
+        for i, line in enumerate(self.metric_lines):
+            new_x = train_state.step
+            new_y = train_state.metrics_test[i]
+            line.set_xdata(np.append(line.get_xdata(), new_x))
+            line.set_ydata(np.append(line.get_ydata(), new_y))
+        
+        for ax in self.axes.flatten():
+            ax.relim()
+            ax.autoscale_view()
+
         self.fig.canvas.draw()
 
 
@@ -264,8 +284,18 @@ def as_iterable(x, length=1):
     return x
 
 
-def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0, pad=0):
-    
+def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
+    '''
+    Args:
+        n_rows
+        n_cols
+        ax_height
+        ax_width
+        space: (vertical, horizontal)
+        pad: (left, right, bottom, top)
+    Returns:
+        fig, axes
+    '''
     ax_height = as_iterable(ax_height, n_rows)
     ax_width = as_iterable(ax_width, n_cols)
     hspace, wspace = as_iterable(space, 2)

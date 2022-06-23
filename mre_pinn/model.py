@@ -6,8 +6,34 @@ dtype = deepxde.config.real(torch)
 
 
 def as_complex(t):
-    real, imag = t[:,::2], t[:,1::2]
-    return torch.complex(real, imag)
+    '''
+    Combine the even and odd indices of a real
+    tensor into the real and imaginary parts of
+    a complex tensor.
+
+    Args:
+        t: (N, 2M) real-valued tensor.
+    Returns:
+        An (N, M) complex-valued tensor.
+    '''
+    N, K = t.shape
+    assert K % 2 == 0
+    return torch.complex(t[:,::2], t[:,1::2])
+
+
+def as_real(t):
+    '''
+    Interleave the real and imaginary parts of a
+    complex tensor into the even and odd indices
+    of a real tensor.
+
+    Args:
+        t: (N, M) complex-valued tensor.
+    Returns:
+        An (N, 2M) real-valued tensor.
+    '''
+    N, M = t.shape
+    return torch.stack([t.real, t.imag], dim=-1).reshape(N, 2*M)
 
 
 class PINN(torch.nn.ModuleList):
