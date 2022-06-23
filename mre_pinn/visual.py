@@ -10,8 +10,9 @@ import deepxde
 
 class NDArrayViewer(object):
     
-    def __init__(self, array, x='x', y='y', labels=None, dpi=25, **kwargs):
-
+    def __init__(
+        self, array, x='x', y='y', labels=None, dpi=25, **kwargs
+    ):
         if isinstance(array, xr.DataArray) and labels is None:
             labels = array.dims
         labels = list(labels)
@@ -99,7 +100,7 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
             ax_height=4,
             ax_width=4,
             space=0.3,
-            pad=[0.9, 0.4, 0.7, 0.4]
+            pad=[1.2, 0.4, 0.7, 0.4]
         )
 
         # training loss plot

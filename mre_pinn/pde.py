@@ -15,14 +15,17 @@ def laplacian(u, x, dim=0):
 
 class HelmholtzPDE(object):
 
-    def __init__(self, rho=1.0):
-        self.rho = rho
+    def __init__(self, detach):
+        self.detach = detach
 
     def __call__(self, x, outputs):
         u, mu = outputs[:,:-1], outputs[:,-1:]
-        assert x.shape[1] == u.shape[1] + 1 # frequency
-        omega, laplace_u = x[:,:1], laplacian(u, x, dim=1).detach()
-        return mu * laplace_u + self.rho * (2*np.pi*omega)**2 * u
+        omega, lu = x[:,:1], laplacian(u, x, dim=1)
+        if self.detach:
+            u, lu = u.detach(), lu.detach()
+        return (
+            mu * lu + (2*np.pi*omega)**2 * u
+        )
 
 
 def lvwe(x, u, mu, lam, rho, omega):

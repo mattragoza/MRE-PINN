@@ -10,39 +10,62 @@ def as_complex(t):
     return torch.complex(real, imag)
 
 
-class ComplexFFN(torch.nn.ModuleList):
+class PINN(torch.nn.ModuleList):
     
-    def __init__(self, n_input, n_layers, n_hidden, n_output, activ_fn, w0=30):
-        
-        modules = []
+    def __init__(
+        self,
+        n_input,
+        n_layers,
+        n_hidden,
+        n_output,
+        activ_fn,
+        complex=False,
+        dense=False,
+        omega0=30
+    ):
+        super().__init__()
+
+        if complex:
+            n_output *= 2
+            self.output_fn = as_complex
+        else:
+            self.output_fn = lambda x: x
+
+        self.linears = []
         for i in range(n_layers):
-            is_first_layer = (i == 0)
-            is_last_layer = (i == n_layers - 1)
-            linear = torch.nn.Linear(
-                n_input,
-                n_output*2 if is_last_layer else n_hidden
-            )
-            n_input += n_hidden
-            modules.append(linear)
-    
+            if i < n_layers - 1:
+                linear = torch.nn.Linear(n_input, n_hidden)
+            else:
+                linear = torch.nn.Linear(n_input, n_output)
+            self.linears.append(linear)
+            self.add_module(f'linear{i}', linear)
+            if dense:
+                n_input += n_hidden
+            else:
+                n_input = n_hidden
+
         self.activ_fn = activ_fn
-        self.w0 = w0
-        super().__init__(modules)
+        self.omega0 = omega0
+        self.dense = dense
 
     def forward(self, input):
-
         input = (input - self.input_loc) / self.input_scale
         
-        for i, module in enumerate(self):
-            w = self.w0 if i == 0 else 1
-            if i < len(self) - 1:
-                output = self.activ_fn(w*module(input))
+        for i, linear in enumerate(self.linears):
+            omega = self.omega0 if i == 0 else 1
+
+            if i < len(self.linears) - 1:
+                output = self.activ_fn(omega * linear(input))
+            else:
+                output = linear(input)
+
+            if self.dense:
                 input = torch.cat([input, output], dim=1)
             else:
-                output = module(input)
+                input = output
 
         output = output * self.output_scale + self.output_loc
-        return as_complex(output)
+        return self.output_fn(output)
 
     def init_weights(
         self, c=6, input_loc=0, input_scale=1, output_loc=0, output_scale=1
