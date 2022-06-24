@@ -13,19 +13,20 @@ def laplacian(u, x, dim=0):
     return torch.cat(components, dim=1)
 
 
-class HelmholtzPDE(object):
+class WaveEquation(object):
 
-    def __init__(self, detach):
+    def __init__(self, detach, rho=1000, dx=1):
         self.detach = detach
+        self.rho = rho
+        self.dx  = dx
 
     def __call__(self, x, outputs):
         u, mu = outputs[:,:-1], outputs[:,-1:]
-        omega, lu = x[:,:1], laplacian(u, x, dim=1)
+        omega = x[:,:1]
+        lu = laplacian(u, x, dim=1) / self.dx**2
         if self.detach:
             u, lu = u.detach(), lu.detach()
-        return (
-            mu * lu + (2*np.pi*omega)**2 * u
-        )
+        return mu * lu + self.rho * (2*np.pi*omega)**2 * u
 
 
 def lvwe(x, u, mu, lam, rho, omega):
