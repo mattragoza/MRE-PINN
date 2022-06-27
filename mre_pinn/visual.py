@@ -321,6 +321,17 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
     )
 
 
+def imshow(a, resolution=1, **kwargs):
+    if im.ndim == 2:
+        n_x, n_y = a.shape
+        a_T = a.T
+    elif im.ndim == 3:
+        n_x, n_y, n_c = a.shape
+        a_T = np.transpose(a, (1, 0, 2))
+    extent = (0, n_x * resolution, 0, n_y * resolution)
+    plt.imshow(a_T, origin='lower', extent=extent, **kwargs)
+
+
 def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
     n_x, n_y = a.shape
     extent = (0, n_x * resolution, 0, n_y * resolution)
