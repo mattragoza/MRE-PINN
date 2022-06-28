@@ -17,46 +17,58 @@ class NDArrayViewer(object):
             labels = array.dims
         labels = list(labels)
 
-        assert x in labels
-        assert y in labels
+        print(array.shape, labels)
 
-        # permute so that x and y are at the end
+        assert x in labels
+        val_dims = [x]
+
+        if y is not None:
+            assert y in labels
+            val_dims.append(y)
+
+        n_val_dims = len(val_dims)
+        n_key_dims = array.ndim - n_val_dims
+        print(n_key_dims, n_val_dims)
+
+        assert len(labels) == array.ndim
+        assert array.ndim >= n_val_dims
+
+        # permute so that val dims are at the end
         permute = list(range(array.ndim))
 
-        x_dim = labels.index(x)
-        permute.append(permute.pop(x_dim))
-        labels.append(labels.pop(x_dim))
-
-        y_dim = labels.index(y)
-        permute.append(permute.pop(y_dim))
-        labels.append(labels.pop(y_dim))
+        for v in val_dims:
+            dim = labels.index(v)
+            permute.append(permute.pop(dim))
+            labels.append(labels.pop(dim))
 
         array = np.transpose(array, permute)
 
         # set up grid of subplots
-        n_x, n_y  = array.shape[-2:]
+        if y is None:
+            n_x = n_y = array.shape[-1] 
+            n_x *= 3
+        else:
+            n_x, n_y = array.shape[-2:]
         ax_height = n_y / dpi
         ax_width  = n_x / dpi
         bar_width = 1 / 4
-
-        assert array.ndim >= 2
-        assert len(labels) == array.ndim
 
         self.fig, self.axes = subplot_grid(
             n_rows=1,
             n_cols=array.ndim,
             ax_height=ax_height,
-            ax_width=[bar_width] * (array.ndim - 2) + [ax_width, bar_width],
+            ax_width=[bar_width] * n_key_dims + [ax_width] + [bar_width] * (n_val_dims - 1),
             space=[0.3, 0.6],
             pad=[0.9, 1.0, 0.7, 0.4]
         )
 
         self.array = array
-        self.index = (0,) * (array.ndim - 2)
+        self.index = (0,) * n_key_dims
+        self.val_dims = val_dims
 
         # create index sliders
         self.sliders = []
-        for i in range(array.ndim - 2):
+        for i in range(n_key_dims):
             if isinstance(array, xr.DataArray):
                 values = array.coords[labels[i]].to_numpy()
             else:
@@ -69,23 +81,33 @@ class NDArrayViewer(object):
             )
             self.sliders.append(slider)
 
-        # create image and color bar
-        self.image = plot_image_2d(
-            self.axes[0,-2],
-            self.array[self.index],
-            resolution=1,
-            xlabel=labels[-2],
-            ylabel=labels[-1],
-            **kwargs
-        )
-        self.cbar = plot_colorbar(self.axes[0,-1], self.image)
+        if y is None: # create line plot
+            line = plot_line_1d(
+                self.axes[0,-1],
+                self.array[self.index],
+                resolution=1,
+                xlabel=labels[-1]
+            )
+            self.set_data = line.set_ydata
+
+        else: # create image and color bar
+            image = plot_image_2d(
+                self.axes[0,-2],
+                self.array[self.index],
+                resolution=1,
+                xlabel=labels[-2],
+                ylabel=labels[-1],
+                **kwargs
+            )
+            cbar = plot_colorbar(self.axes[0,-1], image)
+            self.set_data = lambda x: image.set_array(x.T)
 
     def index_updater(self, i):
         def update(new_value):
             curr_index = list(self.index)
             curr_index[i] = new_value
             self.index = tuple(curr_index)
-            self.image.set_array(self.array[self.index].T)
+            self.set_data(self.array[self.index])
             self.fig.canvas.draw()
         return update
 
@@ -319,6 +341,16 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
             top=1 - tpad/fig_height
         )
     )
+
+
+def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
+    n_x, = a.shape
+    x = np.arange(n_x) * resolution
+    print(a)
+    line = ax.plot(x, a, **kwargs)[0]
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    return line
 
 
 def imshow(a, resolution=1, **kwargs):
