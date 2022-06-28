@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import deepxde
 
+jacobian = deepxde.grad.jacobian
 hessian = deepxde.grad.hessian
 
 
@@ -48,17 +49,17 @@ class WaveEquation(object):
             (N x 3) tensor of PDE residual for each
                 ux,uy,uz displacement component
         '''
-        if self.debug:
-            u, lu = outputs[:,0:2], outputs[:,2:]
-            laplace_u = laplacian(u, x, dim=1) / self.dx**2
-            return laplace_u.detach() - lu
-
         u, mu = outputs[:,0:-1], outputs[:,-1:]
         omega = x[:,:1]
+
+        if self.debug:
+            laplace_u = laplacian(u, x, dim=1) / self.dx**2
+            f = self.rho * (2 * np.pi * omega)**2 * u.detach()
+            return mu + f / (laplace_u.detach() + 1e-5)
+
         f = self.rho * (2 * np.pi * omega)**2 * u
 
         if self.homogeneous:
-
             # Helmholtz equation
             laplace_u = laplacian(u, x, dim=1) / self.dx**2
             div_stress = mu * laplace_u
