@@ -20,7 +20,7 @@ def laplacian(u, resolution=1, dim=0):
         resolution: Input resolution.
         dim: Summation start axis.
     Returns:
-        v: (..., M) Laplacian tensor.
+        L: (..., M) Laplacian tensor.
     '''
     components = []
     for i in range(u.shape[-1]):
