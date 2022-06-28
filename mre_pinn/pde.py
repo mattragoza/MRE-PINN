@@ -14,13 +14,23 @@ def laplacian(u, x, dim=0):
 
 
 class WaveEquation(object):
-
+    '''
+    μ∇²u = -ρω²u
+    '''
     def __init__(self, detach, rho=1000, dx=1):
         self.detach = detach
         self.rho = rho
         self.dx  = dx
 
     def __call__(self, x, outputs):
+        '''
+        Args:
+            x: (N x 4) input tensor of omega,x,y,z
+            outputs: (N x 4) tensor of ux,uy,uz,mu
+        Returns:
+            (N x 3) tensor of PDE residual for each
+                ux,uy,uz displacement component
+        '''
         u, mu = outputs[:,:-1], outputs[:,-1:]
         omega = x[:,:1]
         lu = laplacian(u, x, dim=1) / self.dx**2
