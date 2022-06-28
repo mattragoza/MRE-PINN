@@ -19,24 +19,27 @@ def laplacian(u, x, dim=0):
     '''
     components = []
     for i in range(u.shape[1]):
+        c = i if u.shape[1] > 1 else None
         component = 0
         for j in range(dim, x.shape[1]):
-            component += hessian(u, x, component=i, i=j, j=j)
+            component += hessian(u, x, component=c, i=j, j=j)
         components.append(component)
     return torch.cat(components, dim=1)
 
 
 class WaveEquation(object):
     '''
-    ∇·σ + ρω²u = 0
+    Navier-Cauchy equation for steady-state
+    elastic wave vibration.
+
+    ∇·[μ(∇u + (∇u)ᵀ) + λ(∇·u)I] = -ρω²u
     '''
     def __init__(
-        self, detach, rho=1000, dx=1, homogeneous=False, debug=False
+        self, detach, rho=1000, debug=False
     ):
         self.detach = detach
         self.rho = rho
-        self.dx = dx
-        self.homogeneous = homogeneous
+        self.homogeneous = True
         self.incompressible = True
         self.debug = debug
 
@@ -49,26 +52,16 @@ class WaveEquation(object):
             (N x 3) tensor of PDE residual for each
                 ux,uy,uz displacement component
         '''
-        u, mu = outputs[:,0:-1], outputs[:,-1:]
+        u, mu = outputs[:,:-1], outputs[:,-1:]
         omega = x[:,:1]
 
-        if self.debug:
-            laplace_u = laplacian(u, x, dim=1) / self.dx**2
-            f = self.rho * (2 * np.pi * omega)**2 * u.detach()
-            return mu + f / (laplace_u.detach() + 1e-5)
-
-        f = self.rho * (2 * np.pi * omega)**2 * u
-
-        if self.homogeneous:
-            # Helmholtz equation
-            laplace_u = laplacian(u, x, dim=1) / self.dx**2
-            div_stress = mu * laplace_u
-        else:
-            # Barnhill 2017
-            div_stress = mu * 0
-        
-        if self.detach: # only backprop through mu
+        laplace_u = laplacian(u, x, dim=1)
+        if self.detach: # only backprop to mu
             u, laplace_u = u.detach(), laplace_u.detach()
+
+        # Helmholtz equation
+        div_stress = mu * laplace_u
+        f = self.rho * (2 * np.pi * omega)**2 * u
 
         return div_stress + f
 

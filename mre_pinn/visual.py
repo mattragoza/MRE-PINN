@@ -86,7 +86,8 @@ class NDArrayViewer(object):
                 self.axes[0,-1],
                 self.array[self.index],
                 resolution=1,
-                xlabel=labels[-1]
+                xlabel=labels[-1],
+                **kwargs
             )
             self.set_data = line.set_ydata
 
@@ -346,10 +347,10 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
 def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
     n_x, = a.shape
     x = np.arange(n_x) * resolution
-    print(a)
-    line = ax.plot(x, a, **kwargs)[0]
+    line = ax.plot(x, a)[0]
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    ax.set_ylim(kwargs.get('vmin', None), kwargs.get('vmax', None))
     return line
 
 
