@@ -11,11 +11,22 @@ import deepxde
 class NDArrayViewer(object):
     
     def __init__(
-        self, array, x='x', y='y', labels=None, dpi=25, **kwargs
+        self, array, x='x', y='y', labels=None, dpi=50, **kwargs
     ):
-        if isinstance(array, xr.DataArray) and labels is None:
-            labels = array.dims
+        if isinstance(array, xr.DataArray):
+            if labels is None:
+                labels = array.dims
+            coords = [array.coords[d].to_numpy() for d in array.dims]
+            array = array.to_numpy()
+        else:
+            coords = [np.arange(d) for d in array.shape]
+
         labels = list(labels)
+
+        if np.iscomplexobj(array):
+            array = np.stack([array.real, array.imag], axis=-1)
+            labels.append(None)
+            coords.append(['real', 'imag'])
 
         assert x in labels
         val_dims = [x]
@@ -26,7 +37,6 @@ class NDArrayViewer(object):
 
         n_val_dims = len(val_dims)
         n_key_dims = array.ndim - n_val_dims
-        print(n_key_dims, n_val_dims)
 
         assert len(labels) == array.ndim
         assert array.ndim >= n_val_dims
@@ -38,6 +48,7 @@ class NDArrayViewer(object):
             dim = labels.index(v)
             permute.append(permute.pop(dim))
             labels.append(labels.pop(dim))
+            coords.append(coords.pop(dim))
 
         array = np.transpose(array, permute)
         self.permute = permute
@@ -57,7 +68,7 @@ class NDArrayViewer(object):
             n_cols=array.ndim,
             ax_height=ax_height,
             ax_width=[bar_width] * n_key_dims + [ax_width] + [bar_width] * (n_val_dims - 1),
-            space=[0.3, 0.6],
+            space=[0.3, 0.8],
             pad=[0.9, 1.0, 0.7, 0.4]
         )
 
@@ -68,14 +79,11 @@ class NDArrayViewer(object):
         # create index sliders
         self.sliders = []
         for i in range(n_key_dims):
-            if isinstance(array, xr.DataArray):
-                values = array.coords[labels[i]].to_numpy()
-            else:
-                values = np.arange(array.shape[i])
+
             slider = plot_slider(
                 self.axes[0,i],
                 update=self.index_updater(i),
-                values=values,
+                values=coords[i],
                 label=labels[i]
             )
             self.sliders.append(slider)
