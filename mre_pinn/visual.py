@@ -17,8 +17,6 @@ class NDArrayViewer(object):
             labels = array.dims
         labels = list(labels)
 
-        print(array.shape, labels)
-
         assert x in labels
         val_dims = [x]
 
@@ -42,11 +40,12 @@ class NDArrayViewer(object):
             labels.append(labels.pop(dim))
 
         array = np.transpose(array, permute)
+        self.permute = permute
 
-        # set up grid of subplots
+        # configure subplot grid
         if y is None:
             n_x = n_y = array.shape[-1] 
-            n_x *= 3
+            n_x *= 2
         else:
             n_x, n_y = array.shape[-2:]
         ax_height = n_y / dpi
@@ -82,35 +81,43 @@ class NDArrayViewer(object):
             self.sliders.append(slider)
 
         if y is None: # create line plot
-            line = plot_line_1d(
-                self.axes[0,-1],
+            self.artist_ax = self.axes[0,-1]
+            self.artist = plot_line_1d(
+                self.artist_ax,
                 self.array[self.index],
                 resolution=1,
                 xlabel=labels[-1],
                 **kwargs
             )
-            self.set_data = line.set_ydata
+            self.set_artist_data = self.artist.set_ydata
 
         else: # create image and color bar
-            image = plot_image_2d(
-                self.axes[0,-2],
+            self.artist_ax = self.axes[0,-2]
+            self.artist = plot_image_2d(
+                self.artist_ax,
                 self.array[self.index],
                 resolution=1,
                 xlabel=labels[-2],
                 ylabel=labels[-1],
                 **kwargs
             )
-            cbar = plot_colorbar(self.axes[0,-1], image)
-            self.set_data = lambda x: image.set_array(x.T)
+            plot_colorbar(self.axes[0,-1], self.artist)
+            self.set_artist_data = lambda x: self.artist.set_array(x.T)
+
+        self.fig.canvas.draw()
+        self.update_artist(self.array[self.index])
 
     def index_updater(self, i):
-        def update(new_value):
+        def update_index(new_value):
             curr_index = list(self.index)
             curr_index[i] = new_value
             self.index = tuple(curr_index)
-            self.set_data(self.array[self.index])
-            self.fig.canvas.draw()
-        return update
+            self.update_artist(self.array[self.index])
+        return update_index
+
+    def update_artist(self, data):
+        self.set_artist_data(data)
+        self.fig.canvas.draw()
 
 
 class TrainingPlot(deepxde.display.TrainingDisplay):
@@ -354,7 +361,7 @@ def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
     return line
 
 
-def imshow(a, resolution=1, **kwargs):
+def imshow(ax, a, resolution=1, **kwargs):
     if im.ndim == 2:
         n_x, n_y = a.shape
         a_T = a.T
@@ -362,7 +369,7 @@ def imshow(a, resolution=1, **kwargs):
         n_x, n_y, n_c = a.shape
         a_T = np.transpose(a, (1, 0, 2))
     extent = (0, n_x * resolution, 0, n_y * resolution)
-    plt.imshow(a_T, origin='lower', extent=extent, **kwargs)
+    return ax.imshow(a_T, origin='lower', extent=extent, **kwargs)
 
 
 def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):

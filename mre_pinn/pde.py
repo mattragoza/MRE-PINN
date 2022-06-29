@@ -109,17 +109,14 @@ class WaveEquation(object):
             if self.incompressible: # Barnhill 2017
 
                 grad_u = jacobian(u, x, dim=1)
-                grad_u += torch.transpose(grad_u, 1, 2)
+                grad_u = grad_u + torch.transpose(grad_u, 1, 2)
                 div_grad_u = divergence(grad_u, x, dim=1)
-                #print(grad_u.shape, div_grad_u.shape)
 
                 if self.detach:
                     grad_u = grad_u.detach()
                     div_grad_u = div_grad_u.detach()
 
                 grad_mu = jacobian(mu, x, dim=1)
-                #print(mu.shape, grad_mu.shape)
-                
                 div_stress = mu * div_grad_u + (grad_mu * grad_u).sum(dim=1)
 
         if self.detach:
