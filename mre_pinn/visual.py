@@ -104,16 +104,13 @@ class NDArrayViewer(object):
             self.artist = plot_image_2d(
                 self.artist_ax,
                 self.array[self.index],
-                resolution=1,
+                resolution=coords[-2][1] - coords[-2][0],
                 xlabel=labels[-2],
                 ylabel=labels[-1],
                 **kwargs
             )
             plot_colorbar(self.axes[0,-1], self.artist)
             self.set_artist_data = lambda x: self.artist.set_array(x.T)
-
-        self.fig.canvas.draw()
-        self.update_artist(self.array[self.index])
 
     def index_updater(self, i):
         def update_index(new_value):
@@ -122,6 +119,12 @@ class NDArrayViewer(object):
             self.index = tuple(curr_index)
             self.update_artist(self.array[self.index])
         return update_index
+
+    def update_array(self, array):
+        if np.iscomplexobj(array):
+            array = np.stack([array.real, array.imag], axis=-1)
+        self.array = np.transpose(array, self.permute)
+        self.update_artist(self.array[self.index])
 
     def update_artist(self, data):
         self.set_artist_data(data)
@@ -142,7 +145,7 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
             n_cols=2,
             ax_height=3,
             ax_width=3,
-            space=0.3,
+            space=[0.3, 0.3],
             pad=[1.2, 0.4, 0.7, 0.4]
         )
 
@@ -412,7 +415,7 @@ def plot_slider(ax, update, values=None, label=None, **kwargs):
         ax,
         label=None,
         valmin=0,
-        valmax=n_values - 1,
+        valmax=max(n_values - 1, 1e-5),
         valstep=1,
         orientation='vertical',
         handle_style=dict(size=20)
