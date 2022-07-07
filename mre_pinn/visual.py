@@ -8,109 +8,137 @@ import xarray as xr
 import deepxde
 
 
-class NDArrayViewer(object):
+from .utils import as_iterable
+
+
+def print_if(verbose, *args, **kwargs):
+    if verbose:
+        print(*args, **kwargs)
+
+
+class XArrayViewer(object):
     
     def __init__(
-        self, array, x='x', y='y', labels=None, dpi=50, **kwargs
+        self, xarray, x='x', y='y', hue=None, dpi=50, verbose=False, **kwargs
     ):
-        if isinstance(array, xr.DataArray):
-            if labels is None:
-                labels = array.dims
-            coords = [array.coords[d].to_numpy() for d in array.dims]
-            array = array.to_numpy()
-        else:
-            coords = [np.arange(d) for d in array.shape]
-
-        labels = list(labels)
+        array = xarray.to_numpy()
+        dims = list(xarray.dims)
+        coords = [xarray.coords[d].to_numpy() for d in dims]
 
         if np.iscomplexobj(array):
             array = np.stack([array.real, array.imag], axis=-1)
-            labels.append(None)
+            dims.append('part')
             coords.append(['real', 'imag'])
 
-        assert x in labels
+        assert x in dims, 'invalid x dim'
         val_dims = [x]
-
         if y is not None:
-            assert y in labels
+            assert y in dims, 'invalid y dim'
             val_dims.append(y)
+        if hue is not None:
+            assert hue in dims, 'invalid hue dim'
+            val_dims.append(hue)
 
         n_val_dims = len(val_dims)
         n_key_dims = array.ndim - n_val_dims
 
-        assert len(labels) == array.ndim
-        assert array.ndim >= n_val_dims
+        assert array.ndim >= n_val_dims, 'too many val dims for array'
 
         # permute so that val dims are at the end
         permute = list(range(array.ndim))
 
-        for v in val_dims:
-            dim = labels.index(v)
+        for d in val_dims:
+            dim = dims.index(d)
             permute.append(permute.pop(dim))
-            labels.append(labels.pop(dim))
+            dims.append(dims.pop(dim))
             coords.append(coords.pop(dim))
 
         array = np.transpose(array, permute)
         self.permute = permute
+        print_if(verbose, dims)
+
+        # determine plot type
+        do_line_plot  = (y is None)
+        do_image_plot = (hue is None)
+        assert do_line_plot or do_image_plot, 'either hue or y dim must be None'
 
         # configure subplot grid
-        if y is None:
-            n_x = n_y = array.shape[-1] 
+        if do_line_plot: 
+            n_x = n_y = array.shape[n_key_dims]
             n_x *= 2
+
+            n_rows = 1
+            n_cols = n_key_dims + 1
         else:
             n_x, n_y = array.shape[-2:]
+            n_rows = 1
+            n_cols = n_key_dims + 2
+
         ax_height = n_y / dpi
         ax_width  = n_x / dpi
         bar_width = 1 / 4
 
+        if do_line_plot:
+            ax_width = [bar_width] * n_key_dims + [ax_width]
+        else:
+            ax_width = [bar_width] * n_key_dims + [ax_width, bar_width]
+
         self.fig, self.axes = subplot_grid(
-            n_rows=1,
-            n_cols=array.ndim,
+            n_rows=n_rows,
+            n_cols=n_cols,
             ax_height=ax_height,
-            ax_width=[bar_width] * n_key_dims + [ax_width] + [bar_width] * (n_val_dims - 1),
+            ax_width=ax_width,
             space=[0.3, 0.8],
             pad=[0.9, 1.0, 0.7, 0.4]
         )
-
         self.array = array
         self.index = (0,) * n_key_dims
+
+        self.key_dims = [d for d in dims[:n_key_dims]]
         self.val_dims = val_dims
 
         # create index sliders
+        print_if(verbose, f'creating index sliders for key dims {self.key_dims}')
         self.sliders = []
         for i in range(n_key_dims):
-
             slider = plot_slider(
                 self.axes[0,i],
                 update=self.index_updater(i),
                 values=coords[i],
-                label=labels[i]
+                label=None if dims[i] == 'part' else dims[i]
             )
             self.sliders.append(slider)
 
-        if y is None: # create line plot
+        if do_line_plot: # create line plot
+            print_if(verbose, f'creating line plot for val dims {self.val_dims}')
             self.artist_ax = self.axes[0,-1]
-            self.artist = plot_line_1d(
+            lines = plot_line_1d(
                 self.artist_ax,
                 self.array[self.index],
-                resolution=1,
-                xlabel=labels[-1],
+                resolution=coords[n_key_dims][1] - coords[n_key_dims][0],
+                xlabel=dims[n_key_dims],
                 **kwargs
             )
-            self.set_artist_data = self.artist.set_ydata
+            if len(lines) > 1:
+                self.set_artist_data = lambda x: [
+                    line.set_ydata(x.T[i]) for i, line in enumerate(lines)
+                ]
+            else:
+                self.set_artist_data = lines[0].set_ydata
 
-        else: # create image and color bar
+        else: # create image plot and color bar
+            print_if(verbose, f'creating image plot for val dims {val_dims}')
             self.artist_ax = self.axes[0,-2]
-            self.artist = plot_image_2d(
+            image = plot_image_2d(
                 self.artist_ax,
                 self.array[self.index],
                 resolution=coords[-2][1] - coords[-2][0],
-                xlabel=labels[-2],
-                ylabel=labels[-1],
+                xlabel=dims[-2],
+                ylabel=dims[-1],
                 **kwargs
             )
-            plot_colorbar(self.axes[0,-1], self.artist)
-            self.set_artist_data = lambda x: self.artist.set_array(x.T)
+            plot_colorbar(self.axes[0,-1], image)
+            self.set_artist_data = lambda x: image.set_array(x.T)
 
     def index_updater(self, i):
         def update_index(new_value):
@@ -319,12 +347,6 @@ def elast_color_map(n_colors=255):
     )
 
 
-def as_iterable(x, length=1):
-    if not isinstance(x, (list, tuple)):
-        return [x] * length
-    return x
-
-
 def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
     '''
     Args:
@@ -363,13 +385,16 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
 
 
 def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
-    n_x, = a.shape
+    if a.ndim == 2:
+        n_x, n_hue = a.shape
+    else:
+        n_x, = a.shape
     x = np.arange(n_x) * resolution
-    line = ax.plot(x, a)[0]
+    lines = ax.plot(x, a)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_ylim(kwargs.get('vmin', None), kwargs.get('vmax', None))
-    return line
+    return lines
 
 
 def imshow(ax, a, resolution=1, **kwargs):
