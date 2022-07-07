@@ -1,4 +1,6 @@
+import pathlib
 import numpy as np
+import xarray as xr
 import scipy.io
 import torch
 import deepxde
@@ -6,46 +8,42 @@ import deepxde
 
 def as_tensor(a, complex=True):
     if complex:
-        dtype = torch.complex128
+        dtype = torch.complex64
     else:
         dtype = deepxde.config.real(deepxde.backend.lib)
     return deepxde.backend.as_tensor(a, dtype=dtype)
 
 
 def nd_coords(coords, center=False):
+    '''
+    Cartesian product of a set of coordinate arrays.
+
+    Args:
+        coords: A list of N 1D coordinate arrays.
+        center: If True, center the coordinates.
+    Returns:
+        An array containing N-dimensional coordinates.
+    '''
     coords = np.meshgrid(*coords, indexing='ij')
     coords = np.stack(coords, axis=-1).reshape(-1, len(coords))
-    if center is True:
+    if center:
         coords -= np.mean(coords, axis=0, keepdims=True)
     return coords
 
 
-def nd_coords_from_shape(shape, resolution=1, center=False):
-    resolution = np.broadcast_to(resolution, len(shape))
-    coords = [
-        np.arange(d) * r for d, r in zip(shape, resolution)
-    ]
-    return nd_coords(coords, center)
-
-
-class NDArrayBC(deepxde.icbc.PointSetBC):
+class XArrayBC(deepxde.icbc.PointSetBC):
 
     def __init__(
-        self, array, resolution=1, component=0, batch_size=None, shuffle=True
+        self, xarray, component=0, batch_size=None, shuffle=True
     ):
-        try: # assume it's an xarray with metadata
-            coords = [array.coords[d] for d in array.dims]
-            points = nd_coords(coords[:-1])
-            array = np.array(array)
+        array = xarray.to_numpy()
+        coords = [xarray.coords[d] for d in xarray.dims]
+        points = nd_coords(coords[:-1])
 
-        except AttributeError:
-            points = nd_coords_from_shape(
-                array.shape[:-1], resolution
-            )
-
+        self.shape = array.shape
         self.points = points.astype(deepxde.config.real(np))
         self.values = as_tensor(array).reshape(-1, array.shape[-1])
-        self.component = component
+        self.component = component # which output component
 
         # batch iterator and state
         self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle)
@@ -64,6 +62,115 @@ class NDArrayBC(deepxde.icbc.PointSetBC):
             outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
             self.values[self.batch_indices]
         )
+
+
+def load_bioqic_fem_box_data(data_root):
+    '''
+    Args:
+        data_root: Path to directory with the files:
+            four_target_phantom.mat (wave image)
+            fem_box_ground_truth.npy (elastogram)
+    Returns:
+        An xarray data set with the variables:
+            u: (6, 80, 100, 10, 3) wave image.
+            mu: (6, 80, 100, 10) elastogram.
+        And the dimensions:
+            (frequency, x, y, z, component)
+
+        The frequencies are 50-100 Hz by 10 Hz.
+        The spatial dimensions are in meters.
+    '''
+    data_root  = pathlib.Path(data_root)
+    wave_file  = data_root / 'four_target_phantom.mat'
+    elast_file = data_root / 'fem_box_ground_truth.npy'
+
+    # load true wave image and elastogram
+    u = load_mat_data(wave_file)[0]['u_ft'].T
+    mu = np.load(elast_file)
+
+    # spatial resolution in meters
+    dx = 1e-3
+
+    # convert to xarrays with metadata
+    u_dims = ['frequency', 'component', 'z', 'x', 'y']
+    u_coords = {
+        'frequency': np.linspace(50, 100, u.shape[0]), # Hz
+        'x': np.arange(u.shape[3]) * dx,
+        'y': np.arange(u.shape[4]) * dx,
+        'z': np.arange(u.shape[2]) * dx,
+        'component': ['y', 'x', 'z'],
+    }
+    u = xr.DataArray(u, dims=u_dims, coords=u_coords) * dx
+
+    mu_dims = ['frequency', 'z', 'x', 'y']
+    mu_coords = {
+        'frequency': np.linspace(50, 100, mu.shape[0]), # Hz
+        'x': np.arange(mu.shape[2]) * dx,
+        'y': np.arange(mu.shape[3]) * dx,
+        'z': np.arange(mu.shape[1]) * dx,
+    }
+    mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
+
+    # combine into a data set and transpose the dimensions
+    data = xr.Dataset(dict(u=u, mu=mu))
+    data = data.transpose('frequency', 'x', 'y', 'z', 'component')
+    return data
+
+
+def select_data_subset(
+    data,
+    downsample=None,
+    frequency=None,
+    x_slice=None,
+    y_slice=None,
+    z_slice=None,
+):
+    '''
+    Args:
+        data: An xarray dataset with the dimensions:
+            (frequency, x, y, z, component)
+        downsample: Spatial downsampling factor.
+        frequency: Single frequency to select.
+        x_slice, y_slice, z_slice: Indices of spatial
+            dimensions to subset, resulting in 2D or 1D.
+    Returns:
+        data: An xarray containing the data subset.
+        ndim: Whether the subset is 1D, 2D, or 3D.
+    '''
+    assert list(data.dims) == ['frequency', 'x', 'y', 'z', 'component']
+
+    # spatial downsampling
+    if downsample and downsample > 1:
+        data = data.coarsen(x=downsample, y=downsample, z=downsample).mean()
+
+    # single frequency
+    if frequency is not None:
+        print('Single frequency')
+        data = data.sel(frequency=[frequency])
+    else:
+        print('Multi frequency')
+
+    # single x slice
+    if x_slice is not None:
+        data = data.isel(x=x_slice)
+
+    # single y slice
+    if y_slice is not None:
+        data = data.isel(y=y_slice)
+
+    # single z slice
+    if z_slice is not None:
+        data = data.isel(z=z_slice)
+
+    # number of spatial dimensions
+    ndim = (x_slice is None) + (y_slice is None) + (z_slice is None)
+    assert ndim > 0, 'no spatial dimensions'
+    print(f'{ndim}D')
+
+    if ndim < 3: # subset the displacement components
+        data = data.sel(component=['z', 'x', 'y'][:ndim])
+
+    return data, ndim
 
 
 def load_mat_data(mat_file, verbose=False):
