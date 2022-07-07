@@ -1,5 +1,7 @@
 import numpy as np
 
+from .utils import copy_metadata
+
 grad = np.gradient
 
 
@@ -11,6 +13,7 @@ def hessian(u, resolution, component, i, j):
     return grad(grad(u[...,component], axis=i), axis=j) / resolution**2
 
 
+@copy_metadata
 def laplacian(u, resolution=1, dim=0):
     '''
     Discrete Laplacian operator.
@@ -26,7 +29,8 @@ def laplacian(u, resolution=1, dim=0):
     for i in range(u.shape[-1]):
         component = 0
         for j in range(dim, u.ndim - 1):
-            component += hessian(u, resolution, component=i, i=j, j=j)
+            if u.shape[j] > 1:
+                component += hessian(u, resolution, component=i, i=j, j=j)
         components.append(component)
     return np.stack(components, axis=-1)
 
