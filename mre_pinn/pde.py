@@ -89,6 +89,9 @@ class WaveEquation(object):
         u, mu = outputs[:,:-1], outputs[:,-1:]
         omega = x[:,:1]
 
+        if self.debug:
+            return mu * 0
+
         if self.homogeneous:
 
             laplace_u = laplacian(u, x, dim=1)
