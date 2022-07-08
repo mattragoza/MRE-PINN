@@ -4,6 +4,10 @@ import torch
 from .utils import identity, as_iterable, as_complex
 
 
+def cis(x):
+    return torch.sin(x) + 1j * torch.cos(x)
+
+
 def gaussian(x):
     return torch.exp(-x**2)
 
@@ -11,8 +15,17 @@ def gaussian(x):
 def get_activ_fn(key):
     return {
         's': torch.sin,
-        'g': gaussian
+        'g': gaussian,
+        'i': cis
     }[key]
+
+
+def complex_uniform_(t, loc, scale):
+    print('complex_uniform_')
+    radius = torch.rand(t.shape) * scale 
+    angle  = torch.rand(t.shape) * 2 * np.pi
+    t[...] = radius * torch.exp(1j * angle) + loc
+    return t
 
 
 class MRE_PINN(torch.nn.Sequential):
@@ -28,20 +41,20 @@ class MRE_PINN(torch.nn.Sequential):
         n_hidden,
         activ_fn,
         parallel=True,
-        dense=True
+        dense=True,
+        dtype=torch.float32
     ):
         n_input = input.shape[1]
         n_outputs = [o.shape[1] for o in outputs]
         self.n_outputs = n_outputs
 
-        input_scaler = InputScaler(input)
-        output_scaler = OutputScaler(*outputs)
-        complex_splicer = ComplexSplicer()
+        input_scaler = InputScaler(input, dtype=dtype)
+        output_scaler = OutputScaler(*outputs, dtype=dtype)
 
         if parallel:
-            net_outputs = [n * 2 for n in n_outputs]
+            net_outputs = [n for n in n_outputs]
         else:
-            net_outputs = [sum(n_outputs) * 2]
+            net_outputs = [sum(n_outputs)]
 
         self.idxs = [0] + list(np.cumsum(n_outputs))
 
@@ -51,9 +64,10 @@ class MRE_PINN(torch.nn.Sequential):
                 n_input=n_input,
                 n_layers=n_layers,
                 n_hidden=n_hidden,
-                n_output=n_output,
+                n_output=n_output * (2, 1)[dtype.is_complex],
                 activ_fn=activ_fn,
-                dense=dense
+                dense=dense,
+                dtype=dtype
             ) for n_output in net_outputs
         ]
         if parallel:
@@ -61,11 +75,18 @@ class MRE_PINN(torch.nn.Sequential):
         else:
             net = nets[0]
 
-        super().__init__(input_scaler, net, complex_splicer, output_scaler)
+        if dtype.is_complex:
+            super().__init__(input_scaler, net, output_scaler)
+        else:
+            real_to_complex = RealToComplex()
+            super().__init__(input_scaler, net, real_to_complex, output_scaler)
 
         # initialize weights
         for n in nets:
-            n.init_weights(omega0)
+            if dtype.is_complex:
+                n.init_weights(omega0, c=6)
+            else:
+                n.init_weights(omega0, c=6)
 
         net.regularizer = None
 
@@ -155,7 +176,10 @@ class Feedforward(torch.nn.ModuleList):
                 w_std = np.sqrt(c / n_input)
 
             with torch.no_grad():
-                module.weight.uniform_(-w_std, w_std)
+                if module.weight.dtype.is_complex:
+                    complex_uniform_(module.weight, 0, w_std)
+                else:
+                    module.weight.uniform_(-w_std, w_std)
 
 
 class Parallel(torch.nn.ModuleList):
@@ -169,9 +193,9 @@ class Parallel(torch.nn.ModuleList):
 
 class InputScaler(torch.nn.Module):
 
-    def __init__(self, data):
+    def __init__(self, data, dtype):
         super().__init__()
-        data = torch.as_tensor(data)
+        data = torch.as_tensor(data, dtype=dtype)
         self.loc = data.mean(dim=0, keepdim=True)
         self.scale = data.std(dim=0, keepdim=True)
 
@@ -184,9 +208,9 @@ class InputScaler(torch.nn.Module):
 
 class OutputScaler(torch.nn.Module):
 
-    def __init__(self, *data):
+    def __init__(self, *data, dtype):
         super().__init__()
-        data = torch.cat([torch.as_tensor(d) for d in data], dim=1)
+        data = torch.cat([torch.as_tensor(d, dtype=dtype) for d in data], dim=1)
         self.loc = data.mean(dim=0, keepdim=True)
         self.scale = data.std(dim=0, keepdim=True)
 
@@ -194,7 +218,7 @@ class OutputScaler(torch.nn.Module):
         return input * self.scale + self.loc
 
 
-class ComplexSplicer(torch.nn.Module):
+class RealToComplex(torch.nn.Module):
 
     def forward(self, input):
         return as_complex(input)
