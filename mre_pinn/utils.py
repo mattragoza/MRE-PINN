@@ -8,8 +8,9 @@ def identity(x):
     return x
 
 
-def as_iterable(obj, length=1):
-    if not isinstance(obj, (list, tuple)):
+def as_iterable(obj, length=1, string=False):
+    iterable = (list, tuple, str) if string else (list, tuple)
+    if not isinstance(obj, iterable):
         return [obj] * length
     return obj
 
