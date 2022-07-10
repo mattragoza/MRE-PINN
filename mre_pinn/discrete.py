@@ -40,4 +40,18 @@ def helmholtz_inversion(u, Lu, omega, rho=1000):
     Direct algebraic inversion
     of the Helmholtz equation.
     '''
+    axes = tuple(range(1, u.ndim))
+    omega = np.expand_dims(omega, axis=axes)
     return (-rho * (2 * np.pi * omega)**2 * u / Lu).mean(axis=-1)
+
+
+@copy_metadata
+def sfft(u, shift=True):
+    '''
+    Convert to spatial frequency domain.
+    '''
+    axes = tuple(range(1, u.ndim))
+    u_f = np.fft.fftn(u, axes=axes)
+    if shift:
+        return np.fft.fftshift(u_f, axes=axes)
+    return u_f
