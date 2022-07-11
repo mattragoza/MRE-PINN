@@ -8,6 +8,11 @@ def identity(x):
     return x
 
 
+def print_if(verbose, *args, **kwargs):
+    if verbose:
+        print(*args, **kwargs)
+
+
 def as_iterable(obj, length=1, string=False):
     iterable = (list, tuple, str) if string else (list, tuple)
     if not isinstance(obj, iterable):

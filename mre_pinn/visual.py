@@ -6,83 +6,148 @@ import matplotlib.widgets
 import mpl_toolkits.axes_grid1
 import xarray as xr
 import deepxde
+import ipywidgets
 
-
-from .utils import as_iterable
-
-
-def print_if(verbose, *args, **kwargs):
-    if verbose:
-        print(*args, **kwargs)
+from .utils import print_if, as_iterable
 
 
 class XArrayViewer(object):
-    
+
     def __init__(
-        self, xarray, x='x', y='y', hue=None, dpi=50, verbose=False, **kwargs
+        self,
+        xarray,
+        x='x',
+        y='y',
+        hue=None,
+        row=None,
+        col=None,
+        dpi=50,
+        verbose=False,
+        **kwargs
     ):
-        array = xarray.to_numpy()
-        dims = list(xarray.dims)
-        coords = [xarray.coords[d].to_numpy() for d in dims]
+        xarray = self.preprocess_array(xarray)
 
-        if np.iscomplexobj(array):
-            array = np.stack([array.real, array.imag], axis=-1)
-            dims.append('part')
-            coords.append(['real', 'imag'])
+        self.establish_dimensions(xarray.dims, x, y, hue, row, col)
 
-        assert x in dims, 'invalid x dim'
-        val_dims = [x]
+        print_if(verbose, self.index_dims, self.value_dims)
+        print_if(verbose, self.value_dim_map)
+
+        self.set_array_internals(xarray)
+        self.initialize_subplots(**kwargs)
+
+    def preprocess_array(self, xarray):
+        '''
+        Concatenate real and imaginary parts
+        if the array has a complex dtype.
+        '''
+        if np.iscomplexobj(xarray):
+            xarray = xr.concat(
+                [xarray.real, xarray.imag],
+                dim=xr.DataArray(['real', 'imag'], dims=['part'])
+            )
+        return xarray
+
+    def establish_dimensions(self, dims, x, y, hue, row, col):
+        '''
+        Establish the mapping from array
+        dimensions to subplot components.
+        '''
+        value_dims = []
+        value_dim_map = {}
+
+        if row is not None:
+            value_dims.append(row)
+            value_dim_map['row'] = row
+
+        if col is not None:
+            value_dims.append(col)
+            value_dim_map['col'] = col
+
+        value_dims.append(x)
+        value_dim_map['x'] = x
+
         if y is not None:
-            assert y in dims, 'invalid y dim'
-            val_dims.append(y)
+            value_dims.append(y)
+            value_dim_map['y'] = y
+
         if hue is not None:
-            assert hue in dims, 'invalid hue dim'
-            val_dims.append(hue)
+            value_dims.append(hue)
+            value_dim_map['hue'] = hue
 
-        n_val_dims = len(val_dims)
-        n_key_dims = array.ndim - n_val_dims
+        self.value_dims = value_dims
+        self.value_dim_map = value_dim_map
 
-        assert array.ndim >= n_val_dims, 'too many val dims for array'
+        self.index_dims = [d for d in dims if d not in value_dims]
 
-        # permute so that val dims are at the end
-        permute = list(range(array.ndim))
+    def set_array_internals(self, xarray):
 
-        for d in val_dims:
-            dim = dims.index(d)
-            permute.append(permute.pop(dim))
-            dims.append(dims.pop(dim))
-            coords.append(coords.pop(dim))
+        # permute value dims to the end
+        xarray = xarray.transpose(*(self.index_dims + self.value_dims))
 
-        array = np.transpose(array, permute)
-        self.permute = permute
-        print_if(verbose, dims)
+        # set internal array, dims, and coords
+        self.array = xarray.to_numpy()
+        self.dims = list(xarray.dims)
+        self.coords = {d: list(xarray.coords[d].to_numpy()) for d in self.dims}
+
+        # initial index state
+        self.index = (0,) * len(self.index_dims)
+
+    def get_index_and_title(self, i, j):
+        '''
+        Return the array index and axes title
+        associated with a given row and column.
+        '''
+        index = self.index
+        labels = []
+        if self.row_dim is not None:
+            index += (i,)
+            row_label = str(self.coords[self.row_dim][i])
+            labels.append(row_label)
+        if self.col_dim is not None:
+            index += (j,)
+            col_label = str(self.coords[self.col_dim][j])
+            labels.append(col_label)
+        return index, ' '.join(labels)
+
+    def initialize_subplots(self, dpi=50, **kwargs):
+
+        # determine number of axes
+        n_rows, n_cols = (1, 1)
+        row_dim = self.value_dim_map.get('row', None)
+        col_dim = self.value_dim_map.get('col', None)
+        if row_dim is not None:
+            n_rows = len(self.coords[row_dim])
+        if col_dim is not None:
+            n_cols = len(self.coords[col_dim])
+
+        self.row_dim = row_dim
+        self.col_dim = col_dim
+        self.n_rows = n_rows
+        self.n_cols = n_cols
 
         # determine plot type
-        do_line_plot  = (y is None)
-        do_image_plot = (hue is None)
-        assert do_line_plot or do_image_plot, 'either hue or y dim must be None'
+        x_dim = self.value_dim_map.get('x', None)
+        y_dim = self.value_dim_map.get('y', None)
+        hue_dim = self.value_dim_map.get('hue', None)
+        do_line_plot  = (y_dim is None)
+        do_image_plot = (hue_dim is None)
+        assert not (do_line_plot and do_image_plot)
 
-        # configure subplot grid
-        if do_line_plot: 
-            n_x = n_y = array.shape[n_key_dims]
-            n_x *= 2
-
-            n_rows = 1
-            n_cols = n_key_dims + 1
-        else:
-            n_x, n_y = array.shape[-2:]
-            n_rows = 1
-            n_cols = n_key_dims + 2
+        # determine axes size
+        n_x, n_y = (1, 1)
+        if x_dim is not None:
+            n_x = len(self.coords[x_dim])
+        if y_dim is not None:
+            n_y = len(self.coords[y_dim])
 
         ax_height = n_y / dpi
         ax_width  = n_x / dpi
         bar_width = 1 / 4
 
-        if do_line_plot:
-            ax_width = [bar_width] * n_key_dims + [ax_width]
-        else:
-            ax_width = [bar_width] * n_key_dims + [ax_width, bar_width]
+        ax_height = [ax_height] * n_rows
+        ax_width  = [ax_width]  * n_cols
 
+        # create the subplot grid
         self.fig, self.axes = subplot_grid(
             n_rows=n_rows,
             n_cols=n_cols,
@@ -91,71 +156,69 @@ class XArrayViewer(object):
             space=[0.3, 0.8],
             pad=[0.9, 1.0, 0.7, 0.4]
         )
-        self.array = array
-        self.index = (0,) * n_key_dims
 
-        self.key_dims = [d for d in dims[:n_key_dims]]
-        self.val_dims = val_dims
+        # plot the array data and store the artists
+        self.artists = np.zeros((n_rows, n_cols), dtype=object)
+        for i in range(n_rows):
+            for j in range(n_cols):
+                index, title = self.get_index_and_title(i, j)
 
-        # create index sliders
-        print_if(verbose, f'creating index sliders for key dims {self.key_dims}')
-        self.sliders = []
-        for i in range(n_key_dims):
-            slider = plot_slider(
-                self.axes[0,i],
-                update=self.index_updater(i),
-                values=coords[i],
-                label=None if dims[i] == 'part' else dims[i]
-            )
-            self.sliders.append(slider)
+                if do_line_plot:
+                    x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
+                    lines = plot_line_1d(
+                        self.axes[i,j],
+                        self.array[index],
+                        resolution=x_res,
+                        xlabel=x_dim,
+                        title=title,
+                        **kwargs
+                    )
 
-        if do_line_plot: # create line plot
-            print_if(verbose, f'creating line plot for val dims {self.val_dims}')
-            self.artist_ax = self.axes[0,-1]
-            lines = plot_line_1d(
-                self.artist_ax,
-                self.array[self.index],
-                resolution=coords[n_key_dims][1] - coords[n_key_dims][0],
-                xlabel=dims[n_key_dims],
-                **kwargs
-            )
-            if len(lines) > 1:
-                self.set_artist_data = lambda x: [
-                    line.set_ydata(x.T[i]) for i, line in enumerate(lines)
-                ]
-            else:
-                self.set_artist_data = lines[0].set_ydata
+                    if len(lines) > 1:
+                        artist_updater = lambda x: [
+                            line.set_ydata(x.T[i]) for i, line in enumerate(lines)
+                        ]
+                    else:
+                        artist_updater = lines[0].set_ydata
 
-        else: # create image plot and color bar
-            print_if(verbose, f'creating image plot for val dims {val_dims}')
-            self.artist_ax = self.axes[0,-2]
-            image = plot_image_2d(
-                self.artist_ax,
-                self.array[self.index],
-                resolution=coords[-2][1] - coords[-2][0],
-                xlabel=dims[-2],
-                ylabel=dims[-1],
-                **kwargs
-            )
-            plot_colorbar(self.axes[0,-1], image)
-            self.set_artist_data = lambda x: image.set_array(x.T)
+                else: # plot image and colorbar
+                    x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
+                    image = plot_image_2d(
+                        self.axes[i,j],
+                        self.array[index],
+                        resolution=x_res,
+                        xlabel=x_dim,
+                        ylabel=y_dim,
+                        **kwargs
+                    )
+                    #plot_colorbar(self.axes[0,-1], image)
+                    self.artists[i][j] = image
 
-    def index_updater(self, i):
-        def update_index(new_value):
-            curr_index = list(self.index)
-            curr_index[i] = new_value
-            self.index = tuple(curr_index)
-            self.update_artist(self.array[self.index])
-        return update_index
+        # create interactive sliders for index dims
+        index_coords = {}
+        for d in self.index_dims:
+            index_coords[d] = (0, len(self.coords[d]) - 1, 1)
+            
+        ipywidgets.interact(self.update_index, **index_coords)
+
+    def update_index(self, **kwargs):
+        self.index = tuple([kwargs[d] for d in self.index_dims])
+        coords = {d: self.coords[d][i] for d, i in kwargs.items()}
+        print(coords)
+        self.update_artists()
 
     def update_array(self, array):
         if np.iscomplexobj(array):
             array = np.stack([array.real, array.imag], axis=-1)
         self.array = np.transpose(array, self.permute)
-        self.update_artist(self.array[self.index])
+        self.update_artists()
 
-    def update_artist(self, data):
-        self.set_artist_data(data)
+    def update_artists(self):
+        for i in range(self.n_rows):
+            for j in range(self.n_cols):
+                index, title = self.get_index_and_title(i, j)
+                self.artists[i][j].set_array(self.array[index].T)
+                print((i, j), title)
         self.fig.canvas.draw()
 
 
@@ -384,7 +447,7 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
     )
 
 
-def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
+def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
     if a.ndim == 2:
         n_x, n_hue = a.shape
     else:
@@ -393,6 +456,7 @@ def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
     lines = ax.plot(x, a)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    ax.set_title(title)
     ax.set_ylim(kwargs.get('vmin', None), kwargs.get('vmax', None))
     return lines
 
