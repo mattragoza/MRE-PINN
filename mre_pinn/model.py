@@ -49,7 +49,7 @@ class MRE_PINN(torch.nn.Sequential):
         self.n_outputs = n_outputs
 
         input_scaler = InputScaler(input, dtype=dtype)
-        output_scaler = OutputScaler(*outputs, dtype=dtype)
+        output_scaler = OutputScaler(*outputs, dtype=torch.complex64)
 
         if parallel:
             net_outputs = [n for n in n_outputs]
@@ -88,7 +88,7 @@ class MRE_PINN(torch.nn.Sequential):
             else:
                 n.init_weights(omega0, c=6)
 
-        net.regularizer = None
+        self.regularizer = None
 
 
 class Feedforward(torch.nn.ModuleList):

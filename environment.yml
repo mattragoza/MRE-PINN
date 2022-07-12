@@ -10,17 +10,15 @@ dependencies:
   - scipy
   - scikit-image
   - pandas
+  - xarray
   - nvidia::cudatoolkit=10.2
-  - pytorch::pytorch
-  - jax
-  - flax
-  - optax
+  - pytorch::pytorch<1.12
   - deepxde
-  - fenics-dolfinx
-  - petsc=*=complex*
   - matplotlib
   - seaborn
   - notebook
   - ipykernel
+  - ipywidgets
   - tqdm
   - fire
+

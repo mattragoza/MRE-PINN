@@ -130,8 +130,8 @@ class XArrayViewer(object):
         y_dim = self.value_dim_map.get('y', None)
         hue_dim = self.value_dim_map.get('hue', None)
         do_line_plot  = (y_dim is None)
-        do_image_plot = (hue_dim is None)
-        assert not (do_line_plot and do_image_plot)
+        do_image_plot = (hue_dim is None and not do_line_plot)
+        assert do_line_plot or do_image_plot
 
         # determine axes size
         n_x, n_y = (1, 1)
@@ -139,10 +139,12 @@ class XArrayViewer(object):
             n_x = len(self.coords[x_dim])
         if y_dim is not None:
             n_y = len(self.coords[y_dim])
+        else: # line plot
+            n_x = n_x * 2
+            n_y = n_x // 2
 
         ax_height = n_y / dpi
         ax_width  = n_x / dpi
-        bar_width = 1 / 4
 
         ax_height = [ax_height] * n_rows
         ax_width  = [ax_width]  * n_cols
@@ -153,18 +155,19 @@ class XArrayViewer(object):
             n_cols=n_cols,
             ax_height=ax_height,
             ax_width=ax_width,
-            space=[0.3, 0.8],
-            pad=[0.9, 1.0, 0.7, 0.4]
+            space=[0.25, 0.25],
+            pad=[0.65, 0.35, 0.55, 0.45]
         )
 
         # plot the array data and store the artists
-        self.artists = np.zeros((n_rows, n_cols), dtype=object)
+        self.artists = [
+            [None for i in range(n_cols)] for j in range(n_rows)
+        ]
         for i in range(n_rows):
             for j in range(n_cols):
                 index, title = self.get_index_and_title(i, j)
-
+                x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
                 if do_line_plot:
-                    x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
                     lines = plot_line_1d(
                         self.axes[i,j],
                         self.array[index],
@@ -173,52 +176,61 @@ class XArrayViewer(object):
                         title=title,
                         **kwargs
                     )
-
                     if len(lines) > 1:
-                        artist_updater = lambda x: [
-                            line.set_ydata(x.T[i]) for i, line in enumerate(lines)
-                        ]
+                        self.artists[i][j] = lines
                     else:
-                        artist_updater = lines[0].set_ydata
-
+                        self.artists[i][j] = lines[0]
                 else: # plot image and colorbar
-                    x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
                     image = plot_image_2d(
                         self.axes[i,j],
                         self.array[index],
                         resolution=x_res,
                         xlabel=x_dim,
                         ylabel=y_dim,
+                        title=title,
                         **kwargs
                     )
                     #plot_colorbar(self.axes[0,-1], image)
                     self.artists[i][j] = image
 
         # create interactive sliders for index dims
-        index_coords = {}
+        self.sliders = []
         for d in self.index_dims:
-            index_coords[d] = (0, len(self.coords[d]) - 1, 1)
-            
-        ipywidgets.interact(self.update_index, **index_coords)
+            slider = ipywidgets.IntSlider(
+                value=0, min=0, max=len(self.coords[d]) - 1, step=1,
+                description=d
+            )
+            self.sliders.append(slider)
+
+        ipywidgets.interact(
+            self.update_index,
+            **{d: s for d, s in zip(self.index_dims, self.sliders)}
+        )
 
     def update_index(self, **kwargs):
-        self.index = tuple([kwargs[d] for d in self.index_dims])
         coords = {d: self.coords[d][i] for d, i in kwargs.items()}
         print(coords)
+        self.index = tuple([kwargs[d] for d in self.index_dims])
         self.update_artists()
 
-    def update_array(self, array):
-        if np.iscomplexobj(array):
-            array = np.stack([array.real, array.imag], axis=-1)
-        self.array = np.transpose(array, self.permute)
+    def update_array(self, xarray):
+        xarray = self.preprocess_array(xarray)
+        xarray = xarray.transpose(*(self.index_dims + self.value_dims))
+        self.array = xarray.to_numpy()
         self.update_artists()
 
     def update_artists(self):
         for i in range(self.n_rows):
             for j in range(self.n_cols):
                 index, title = self.get_index_and_title(i, j)
-                self.artists[i][j].set_array(self.array[index].T)
-                print((i, j), title)
+                artist = self.artists[i][j]
+                if isinstance(artist, list): # multiple lines
+                    for k, artist in enumerate(artist):
+                        artist.set_ydata(self.array[index].T[k])
+                elif isinstance(artist, matplotlib.lines.Line2D): # one line
+                    artist.set_ydata(self.array[index])
+                else: # image
+                    artist.set_array(self.array[index].T)
         self.fig.canvas.draw()
 
 
@@ -472,13 +484,14 @@ def imshow(ax, a, resolution=1, **kwargs):
     return ax.imshow(a_T, origin='lower', extent=extent, **kwargs)
 
 
-def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, **kwargs):
+def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
     n_x, n_y = a.shape
     extent = (0, n_x * resolution, 0, n_y * resolution)
     ax.autoscale(enable=True, tight=True)
     im = ax.imshow(a.T, origin='lower', extent=extent, **kwargs)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    ax.set_title(title)
     return im
 
 

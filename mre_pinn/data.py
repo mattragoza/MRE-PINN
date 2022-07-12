@@ -167,8 +167,8 @@ def select_data_subset(
     assert ndim > 0, 'no spatial dimensions'
     print(f'{ndim}D')
 
-    if ndim < 3: # subset the displacement components
-        data = data.sel(component=['z', 'x', 'y'][:ndim])
+    # subset the displacement components
+    data = data.sel(component=['z', 'y', 'x'][:ndim])
 
     return data, ndim
 
