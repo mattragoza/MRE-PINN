@@ -8,9 +8,21 @@ def identity(x):
     return x
 
 
+def exists(x):
+    return x is not None
+
+
 def print_if(verbose, *args, **kwargs):
     if verbose:
         print(*args, **kwargs)
+
+
+def parse_iterable(obj, sep='-', type=None):
+    if isinstance(obj, str):
+        obj = obj.split(sep)
+    if type is not None:
+        return [type(x) for x in obj]
+    return obj
 
 
 def as_iterable(obj, length=1, string=False):
@@ -86,6 +98,8 @@ def as_xarray(a, like):
     Returns:
         An xarray with the given array values.
     '''
+    if isinstance(a, torch.Tensor):
+        a = a.detach().cpu().numpy()
     return xr.DataArray(a, dims=like.dims, coords=like.coords)
 
 
@@ -99,16 +113,33 @@ def copy_metadata(func):
     return wrapper
 
 
+def concat(args, dim=0):
+    try:
+        return torch.cat(args, dim=dim)
+    except TypeError:
+        return np.concatenate(args, axis=dim)
+
+
 def minibatch(func, batch_size):
+
     @wraps(func)
     def wrapper(*args, **kwargs):
+
         N = args[0].shape[0]
+        assert N > 0
+
         if batch_size >= N:
             return func(*args, **kwargs)
+
         outputs = []
         for i in range(0, N, batch_size):
             batch_args = [a[i:i + batch_size] for a in args]
             batch_output = func(*batch_args, **kwargs)
             outputs.append(batch_output)
-        return np.concatenate(outputs, axis=0)
+
+        if isinstance(batch_output, tuple):
+            return map(concat, zip(*outputs))
+
+        return concat(outputs)
+
     return wrapper

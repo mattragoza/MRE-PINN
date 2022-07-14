@@ -1,6 +1,7 @@
 import sys, os
 import numpy as np
 import torch
+import fire
 
 os.environ['DDEBACKEND'] = 'pytorch'
 import deepxde
@@ -9,62 +10,102 @@ import mre_pinn
 
 
 def train(
-    wave_file='data/wave_sim/steady_state_wave.npy',
-    elast_file='data/wave_sim/elasticity.npy',
+    # data settings
+    data_root='data/BIOQIC',
+    downsample=False,
+    frequency=None,
+    x_slice=None,
+    y_slice=None,
+    z_slice=None,
+
+    # pde settings
+    homogeneous=True,
+    incompressible=True,
+
+    # model settings
+    omega0=32,
     n_layers=5,
     n_hidden=128,
-    activ_fn='sin',
-    lr=1e-3,
-    pde_loss_wt=1e-5,
+    activ_fn='s',
+
+    # training settings
+    learning_rate=1e-4,
+    pde_loss_wt=1e-7,
     data_loss_wt=1,
     optimizer='adam',
+    batch_size=200,
     n_domain=200,
-    n_test=200,
     n_iters=20000,
 ):
-    print(f'Loading wave image {wave_file}')
-    wave_image = mre_pinn.data.ImagePointSet(wave_file)
+    # load the FEM box data set
+    data = mre_pinn.data.load_bioqic_fem_box_data(data_root)
 
-    print(f'Loading elastogram {elast_file}')
-    elast_image = mre_pinn.data.ImagePointSet(elast_file)
-    
-    print('Initializing PDE and geometry')
-    pde = mre_pinn.pde.HelmholtzPDE(rho=1, omega=10*(2*np.pi))
-    geometry = deepxde.geometry.Rectangle([0, 0], [1, 1])
-
-    # data combines geometry, PDE residual, and boundary conditions
-    data = deepxde.data.PDE(
-        geometry=geometry,
-        pde=pde,
-        bcs=[wave_image],
-        num_domain=n_domain,
-        anchors=wave_image.points,
-        num_test=n_test
+    # select data subset
+    data, ndim = mre_pinn.data.select_data_subset(
+        data, downsample, frequency, x_slice, y_slice, z_slice
     )
+    print(data)
 
-    print('Initializing model')
-    net = mre_pinn.model.Parallel([
-        mre_pinn.model.ComplexFFN(
-            n_input=2,
-            n_layers=n_layers,
-            n_hidden=n_hidden,
-            n_output=n_output,
-            activ_fn={'sin': torch.sin}[activ_fn]
-        ) for n_output in [2, 1] # u and mu
-    ])
+    # direct Helmholtz inversion via discrete laplacian
+    data['Lu'] = mre_pinn.discrete.laplacian(data['u'])
+    data['Mu'] = mre_pinn.discrete.helmholtz_inversion(data['u'], data['Lu'])
+
+    # test on 4x downsampled data
+    test_data = data.coarsen(**{d: 4 for d in data.field.spatial_dims}).mean()
+
+    # convert to vector/scalar fields and coordinates
+    x  = data.u.field.points().astype(np.float32)
+    u  = data.u.field.values().astype(np.complex64)
+    mu = data.mu.field.values().astype(np.complex64)
+
+    print('x ', type(x), x.shape, x.dtype)
+    print('u ', type(u), u.shape, u.dtype)
+    print('mu', type(mu), mu.shape, mu.dtype)
+
+    # initialize the PDE, boundary conditions, and geometry
+    pde = mre_pinn.pde.WaveEquation(
+        homogeneous=homogeneous,
+        incompressible=incompressible,
+        detach=True
+    )
+    bc = mre_pinn.data.PointSetBC(x, u, batch_size=batch_size)
+    geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
+
+    # define model architecture
+    net = mre_pinn.model.MREPINN(
+        input=x,
+        outputs=[u, mu],
+        omega0=omega0,
+        n_layers=n_layers,
+        n_hidden=n_hidden,
+        activ_fn=activ_fn,
+        parallel=True,
+        dense=True,
+        dtype=torch.float32
+    )
     print(net)
 
-    model = deepxde.Model(data, net)
+    # compile model and configure training settings
+    model = mre_pinn.training.MREPINNModel(net, pde, geom, bc, num_domain=batch_size)
     model.compile(
-        optimizer=optimizer, lr=lr, loss_weights=[pde_loss_wt, data_loss_wt]
+        optimizer=optimizer,
+        lr=learning_rate,
+        loss_weights=[pde_loss_wt, data_loss_wt],
+        loss=mre_pinn.training.normalized_l2_loss_fn(u)
     )
+    deepxde.display.training_display = mre_pinn.visual.TrainingPlot(
+        losses=['pde_loss', 'data_loss'], metrics=[]
+    )
+    callbacks = [
+        mre_pinn.training.TestEvaluation(100, test_data, batch_size, col='frequency'),
+        mre_pinn.training.PDEResampler(period=1),
+    ]
 
-    print('Starting training loop')
-    loss_history, train_state = model.train(epochs=n_iters)
-
-    # TODO evaluate results
-    print('Done')
+    # train the model
+    model.train(n_iters, callbacks=[
+        mre_pinn.training.PDEResampler(period=1)
+    ])
 
 
 if __name__ == '__main__':
-    train()
+    fire.Fire(train)

@@ -28,7 +28,7 @@ def complex_uniform_(t, loc, scale):
     return t
 
 
-class MRE_PINN(torch.nn.Sequential):
+class MREPINN(torch.nn.Sequential):
     '''
     A physics-informed neural network for elasticity reconstruction.
     '''
@@ -42,7 +42,7 @@ class MRE_PINN(torch.nn.Sequential):
         activ_fn,
         parallel=True,
         dense=True,
-        dtype=torch.float32
+        dtype=None
     ):
         n_input = input.shape[1]
         n_outputs = [o.shape[1] for o in outputs]
@@ -60,7 +60,7 @@ class MRE_PINN(torch.nn.Sequential):
 
         # construct the network
         nets = [
-            Feedforward(
+            FFNN(
                 n_input=n_input,
                 n_layers=n_layers,
                 n_hidden=n_hidden,
@@ -91,7 +91,7 @@ class MRE_PINN(torch.nn.Sequential):
         self.regularizer = None
 
 
-class Feedforward(torch.nn.ModuleList):
+class FFNN(torch.nn.ModuleList):
     '''
     A generic feedforward neural network.
 

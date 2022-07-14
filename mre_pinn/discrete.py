@@ -1,47 +1,81 @@
 import numpy as np
+import xarray as xr
 
 from .utils import copy_metadata
 
-grad = np.gradient
 
-
-def jacobian(u, resolution, i, j):
-    return grad(u[...,i], axis=j) / resolution
-
-
-def hessian(u, resolution, component, i, j):
-    return grad(grad(u[...,component], axis=i), axis=j) / resolution**2
-
-
-@copy_metadata
-def laplacian(u, resolution=1, dim=0):
+def grad(u, dim):
     '''
-    Discrete Laplacian operator.
+    Finite difference gradient.
 
     Args:
-        u: (..., M) output tensor.
-        resolution: Input resolution.
-        dim: Summation start axis.
+        u: An xarray of function values.
+        dim: Coordinate to differentiate with
+            respect to, using finite differences.
     Returns:
-        L: (..., M) Laplacian tensor.
+        du: An xarray of derivative values.
+    '''
+    return u.differentiate(coord=dim)
+
+
+def jacobian(u, i, j):
+    '''
+    Evaluate discrete Jacobian matrix.
+
+    Args:
+        u: An xarray of vector-valued function
+            evaluations, which has a component dim
+            representing the vector components.
+        i: Vector component to differentiate.
+        j: Coordinate to differentate with respect to.
+    Returns:
+        du_i/dx_j
+    '''
+    return grad(u.sel(component=i), dim=j)
+
+
+def hessian(u, component, i, j):
+    '''
+    Evaluate discrete Hessian matrix.
+
+    Args:
+        u: An xarray of vector-valued function
+            evaluations, which has a component dim
+            representing the vector components.
+        component: Vector component to differentiate.
+        i: First coordinate to differentate with respect to.
+        j: Second coordinate to differentate with respect to.
+    Returns:
+        du_component/dx_ij
+    '''
+    return grad(grad(u.sel(component=component), dim=i), dim=j)
+
+
+def laplacian(u):
+    '''
+    Evaluate discrete Laplacian operator.
+
+    Args:
+        u: (..., M) xarray of function values.
+    Returns:
+        Lu: (..., M) xarray of Laplacian values.
     '''
     components = []
-    for i in range(u.shape[-1]):
+    for idx, i in enumerate(u.component):
         component = 0
-        for j in range(dim, u.ndim - 1):
-            if u.shape[j] > 1:
-                component += hessian(u, resolution, component=i, i=j, j=j)
+        for j in u.field.spatial_dims:
+            component += hessian(u, component=i, i=j, j=j)
         components.append(component)
-    return np.stack(components, axis=-1)
+    return xr.concat(components, dim=u.component).transpose(*u.dims)
 
 
-def helmholtz_inversion(u, Lu, omega, rho=1000):
+def helmholtz_inversion(u, Lu, rho=1000):
     '''
     Direct algebraic inversion
     of the Helmholtz equation.
     '''
     axes = tuple(range(1, u.ndim))
-    omega = np.expand_dims(omega, axis=axes)
+    omega = np.expand_dims(u.frequency, axis=axes)
     return (-rho * (2 * np.pi * omega)**2 * u / Lu).mean(axis=-1)
 
 

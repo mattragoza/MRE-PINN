@@ -39,7 +39,9 @@ def divergence(u, x, dim=0):
 
 def laplacian(u, x, dim=0):
     '''
-    Continuous Laplacian operator.
+    Continuous Laplacian operator,
+    which is the divergence of the
+    gradient.
 
     Args:
         u: (N, M) output tensor.

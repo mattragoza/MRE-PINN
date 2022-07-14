@@ -8,7 +8,9 @@ import xarray as xr
 import deepxde
 import ipywidgets
 
-from .utils import print_if, as_iterable
+from .utils import exists, print_if, as_iterable
+
+DPI = 50
 
 
 class XArrayViewer(object):
@@ -21,7 +23,6 @@ class XArrayViewer(object):
         hue=None,
         row=None,
         col=None,
-        dpi=50,
         verbose=False,
         **kwargs
     ):
@@ -55,22 +56,22 @@ class XArrayViewer(object):
         value_dims = []
         value_dim_map = {}
 
-        if row is not None:
+        if exists(row):
             value_dims.append(row)
             value_dim_map['row'] = row
 
-        if col is not None:
+        if exists(col):
             value_dims.append(col)
             value_dim_map['col'] = col
 
         value_dims.append(x)
         value_dim_map['x'] = x
 
-        if y is not None:
+        if exists(y):
             value_dims.append(y)
             value_dim_map['y'] = y
 
-        if hue is not None:
+        if exists(hue):
             value_dims.append(hue)
             value_dim_map['hue'] = hue
 
@@ -99,18 +100,19 @@ class XArrayViewer(object):
         '''
         index = self.index
         labels = []
-        if self.row_dim is not None:
+        if exists(self.row_dim):
             index += (i,)
             row_label = str(self.coords[self.row_dim][i])
             labels.append(row_label)
-        if self.col_dim is not None:
+        if exists(self.col_dim):
             index += (j,)
             col_label = str(self.coords[self.col_dim][j])
             labels.append(col_label)
         return index, ' '.join(labels)
 
-    def initialize_subplots(self, dpi=50, **kwargs):
-
+    def initialize_subplots(
+        self, ax_height=None, ax_width=None, dpi=None, **kwargs
+    ):
         # determine number of axes
         n_rows, n_cols = (1, 1)
         row_dim = self.value_dim_map.get('row', None)
@@ -135,16 +137,21 @@ class XArrayViewer(object):
 
         # determine axes size
         n_x, n_y = (1, 1)
-        if x_dim is not None:
+        if exists(x_dim):
             n_x = len(self.coords[x_dim])
-        if y_dim is not None:
+        if exists(y_dim):
             n_y = len(self.coords[y_dim])
         else: # line plot
-            n_x = n_x * 2
             n_y = n_x // 2
 
-        ax_height = n_y / dpi
-        ax_width  = n_x / dpi
+        if ax_height is None and ax_width is None:
+            dpi = dpi or DPI
+            ax_height = n_y / dpi
+            ax_width  = n_x / dpi
+        elif ax_height is None:
+            ax_height = ax_width * n_y / n_x
+        elif ax_width is None:
+            ax_width = ax_height * n_x / n_y
 
         ax_height = [ax_height] * n_rows
         ax_width  = [ax_width]  * n_cols
@@ -155,8 +162,8 @@ class XArrayViewer(object):
             n_cols=n_cols,
             ax_height=ax_height,
             ax_width=ax_width,
-            space=[0.25, 0.25],
-            pad=[0.65, 0.35, 0.55, 0.45]
+            space=[0.25, 0.50],
+            pad=[0.75, 0.35, 0.55, 0.45]
         )
 
         # plot the array data and store the artists
@@ -209,7 +216,8 @@ class XArrayViewer(object):
 
     def update_index(self, **kwargs):
         coords = {d: self.coords[d][i] for d, i in kwargs.items()}
-        print(coords)
+        if coords:
+            print(coords)
         self.index = tuple([kwargs[d] for d in self.index_dims])
         self.update_artists()
 
@@ -253,21 +261,24 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
         )
 
         # training loss and metric plots
-        self.loss_lines = [
-            self.axes[0,0].plot([], [], label=l)[0] for l in self.losses
-        ]
-        self.axes[0,0].set_ylabel('loss')
+        self.loss_lines = []
+        for loss in self.losses:
+            line, = self.axes[0,0].plot([], [], label=loss)
+            self.loss_lines.append(line)
 
-        self.metric_lines = [
-            self.axes[0,1].plot([], [], label=m)[0] for m in self.metrics
-        ]
+        self.metric_lines = []
+        for metric in self.metrics:
+            line, = self.axes[0,1].plot([], [], label=metric)
+            self.metric_lines.append(line)
+
+        self.axes[0,0].set_ylabel('loss')
         self.axes[0,1].set_ylabel('metric')
 
         for ax in self.axes.flatten():
             ax.set_xlabel('iteration')
             ax.set_yscale('log')
-            ax.grid(linestyle=':')
-            ax.legend(frameon=False)
+            #ax.grid(linestyle=':')
+            ax.legend(frameon=True, edgecolor='0.2')
 
         self.initialized = True
 

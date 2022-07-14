@@ -1,17 +1,11 @@
-import pathlib
+import sys, pathlib
 import numpy as np
 import xarray as xr
 import scipy.io
 import torch
 import deepxde
 
-
-def as_tensor(a, complex=True):
-    if complex:
-        dtype = torch.complex64
-    else:
-        dtype = deepxde.config.real(deepxde.backend.lib)
-    return deepxde.backend.as_tensor(a, dtype=dtype)
+from .utils import print_if, parse_iterable, as_matrix
 
 
 def nd_coords(coords, center=False):
@@ -31,40 +25,70 @@ def nd_coords(coords, center=False):
     return coords
 
 
-class XArrayBC(deepxde.icbc.PointSetBC):
+@xr.register_dataset_accessor('field')
+@xr.register_dataarray_accessor('field')
+class FieldAccessor(object):
+    '''
+    Accessor for treating an xarray as a scalar or vector field.
+    '''
+    def __init__(self, xarray):
+        self.xarray = xarray
+
+    @property
+    def dims(self):
+        return [d for d in self.xarray.dims if d != 'component']
+
+    @property
+    def spatial_dims(self):
+        return [d for d in 'xyz' if d in self.xarray.dims]
+
+    def points(self):
+        return nd_coords((self.xarray.coords[d] for d in self.xarray.field.dims))
+
+    def values(self):
+        if 'component' in self.xarray.dims: # vector field
+            n_components = self.xarray.sizes['component']
+            T = self.xarray.field.dims + ['component']
+            return self.xarray.transpose(*T).values.reshape(-1, n_components)
+        else: # scalar field
+            return self.xarray.values.reshape(-1, 1)
+
+
+class PointSetBC(deepxde.icbc.PointSetBC):
 
     def __init__(
-        self, xarray, component=0, batch_size=None, shuffle=True
+        self, points, values, component=0, batch_size=None, shuffle=True
     ):
-        array = xarray.to_numpy()
-        coords = [xarray.coords[d] for d in xarray.dims]
-        points = nd_coords(coords[:-1])
+        self.points = np.asarray(points)
+        self.values = torch.as_tensor(values)
+        self.component = component # which component of model output
 
-        self.shape = array.shape
-        self.points = points.astype(deepxde.config.real(np))
-        self.values = as_tensor(array).reshape(-1, array.shape[-1])
-        self.component = component # which output component
-
-        # batch iterator and state
-        self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle)
         self.batch_size = batch_size
-        self.batch_indices = None
+        if batch_size is not None: # batch iterator and state
+            self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle)
+            self.batch_indices = None
 
     def __len__(self):
         return self.points.shape[0]
 
     def collocation_points(self, X):
-        self.batch_indices = self.batch_sampler.get_next(self.batch_size)
-        return self.points[self.batch_indices]
+        if self.batch_size is not None:
+            self.batch_indices = self.batch_sampler.get_next(self.batch_size)
+            return self.points[self.batch_indices]
+        return self.points
 
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
+        if self.batch_size is not None:
+            values = self.values[self.batch_indices]
+        else:
+            values = self.values
         return (
             outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
-            self.values[self.batch_indices]
+            values
         )
 
 
-def load_bioqic_fem_box_data(data_root):
+def load_bioqic_fem_box_data(data_root, verbose=True):
     '''
     Args:
         data_root: Path to directory with the files:
@@ -85,8 +109,8 @@ def load_bioqic_fem_box_data(data_root):
     elast_file = data_root / 'fem_box_ground_truth.npy'
 
     # load true wave image and elastogram
-    u = load_mat_data(wave_file)[0]['u_ft'].T
-    mu = np.load(elast_file)
+    u = load_mat_data(wave_file, verbose)[0]['u_ft'].T
+    mu = load_np_data(elast_file, verbose)
 
     # spatial resolution in meters
     dx = 1e-3
@@ -123,7 +147,7 @@ def select_data_subset(
     frequency=None,
     x_slice=None,
     y_slice=None,
-    z_slice=None,
+    z_slice=None
 ):
     '''
     Args:
@@ -131,24 +155,22 @@ def select_data_subset(
             (frequency, x, y, z, component)
         downsample: Spatial downsampling factor.
         frequency: Single frequency to select.
-        x_slice, y_slice, z_slice: Indices of spatial
-            dimensions to subset, resulting in 2D or 1D.
+        x_slice, y_slice, z_slice: Indices of spatial dimensions to subset,
+            resulting in 2D or 1D.
     Returns:
         data: An xarray containing the data subset.
         ndim: Whether the subset is 1D, 2D, or 3D.
     '''
-    assert list(data.dims) == ['frequency', 'x', 'y', 'z', 'component']
-
     # spatial downsampling
     if downsample and downsample > 1:
         data = data.coarsen(x=downsample, y=downsample, z=downsample).mean()
 
     # single frequency
     if frequency is not None:
-        print('Single frequency')
+        print('Single frequency', end=' ')
         data = data.sel(frequency=[frequency])
     else:
-        print('Multi frequency')
+        print('Multi frequency', end=' ')
 
     # single x slice
     if x_slice is not None:
@@ -173,6 +195,14 @@ def select_data_subset(
     return data, ndim
 
 
+def load_np_data(np_file, verbose=False):
+    np_file = str(np_file)
+    print_if(verbose, f'Loading {np_file}')
+    a = np.load(np_file)
+    print_if(verbose, ' '*4, type(a), a.shape, a.dtype)
+    return a
+
+
 def load_mat_data(mat_file, verbose=False):
     '''
     Load data set from MATLAB file.
@@ -186,6 +216,7 @@ def load_mat_data(mat_file, verbose=False):
             (i.e. if True, then reverse order)
     '''
     mat_file = str(mat_file)
+    print_if(verbose, f'Loading {mat_file}')
     try:
         data = scipy.io.loadmat(mat_file)
         rev_axes = True
@@ -198,7 +229,6 @@ def load_mat_data(mat_file, verbose=False):
         print(f'Failed to load {mat_file}', file=sys.stderr)
         raise
     if verbose:
-        print(f'Loading {mat_file}')
         print_mat_info(data, level=1)
     return data, rev_axes
 

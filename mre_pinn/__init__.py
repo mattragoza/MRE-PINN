@@ -1,5 +1,7 @@
-import sys
+import os
+os.environ['DDEBACKEND'] = 'pytorch'
+import deepxde
 
-print(f'Loading {__file__}', file=sys.stderr)
-
-from . import data, model, pde, discrete, visual, utils
+from . import (
+	data, model, pde, training, discrete, visual, utils
+)
