@@ -66,21 +66,47 @@ class WaveEquation(object):
     elastic wave vibration.
 
     ∇·[μ(∇u + (∇u)ᵀ) + λ(∇·u)I] = -ρω²u
+
+    Args:
+        homogeneous: Assume ∇μ = ∇λ = 0
+        incompressible: Assume ∇·u = 0
+        rho: Material density in kg/m³
+        lambda_: Lame's first parameter
+        detach: Do not backprop through u
     '''
+    @classmethod
+    def from_name(cls, name, **kwargs):
+        name = name.lower()
+        if name == 'helmholtz':
+            return WaveEquation(homogeneous=True, incompressible=True, **kwargs)
+        elif name == 'hetero':
+            return WaveEquation(homogeneous=False, incompressible=True, **kwargs)
+        elif name == 'compress':
+            return WaveEquation(homogeneous=True, incompressible=False, **kwargs)
+        elif name == 'general':
+            return WaveEquation(homogeneous=False, incompressible=False, **kwargs)
+        else:
+            raise KeyError(f'unrecognized wave equation: {name}')
+
     def __init__(
-        self, detach, rho=1000,
-        homogeneous=True,
-        incompressible=True,
+        self,
+        homogeneous,
+        incompressible,
+        rho=1000,
+        lambda_=0,
+        detach=True,
         debug=False
     ):
-        self.detach = detach
-        self.rho = rho
         self.homogeneous = homogeneous
         self.incompressible = incompressible
+        self.rho, self.lambda_ = rho, lambda_
+        self.detach = detach
         self.debug = debug
 
     def __call__(self, x, outputs):
         '''
+        Compute the PDE residual.
+
         Args:
             x: (N x 4) input tensor of omega,x,y,z
             outputs: (N x 4) tensor of ux,uy,uz,mu
@@ -89,99 +115,65 @@ class WaveEquation(object):
                 ux,uy,uz displacement component
         '''
         u, mu = outputs[:,:-1], outputs[:,-1:]
-        omega = x[:,:1]
+        omega = 2 * np.pi * x[:,:1] # radians
 
-        if self.debug:
-            return mu * 0
+        if self.debug: # no PDE residual
+            return u * 0
 
-        if self.homogeneous:
+        elif self.homogeneous: # Helmholtz equation
 
             laplace_u = laplacian(u, x, dim=1)
             if self.detach:
                 laplace_u = laplace_u.detach()
 
-            if self.incompressible: # Helmholtz
-                div_stress = mu * laplace_u
-            else:
+            div_stress = mu * laplace_u
+
+            if not self.incompressible: # add pressure term
+
                 div_u = divergence(u.unsqueeze(1), x, dim=1)
                 grad_div_u = jacobian(div_u, x, dim=1)[:,0,:]
                 if self.detach:
                     grad_div_u = grad_div_u.detach()
 
-                div_stress = mu * laplace_u + mu * grad_div_u
+                div_stress += (self.lambda_ + mu) * grad_div_u
 
-        else: 
-            if self.incompressible: # Barnhill 2017
+        elif self.incompressible: # Barnhill 2017
 
-                grad_u = jacobian(u, x, dim=1)
-                grad_u = grad_u + torch.transpose(grad_u, 1, 2)
-                div_grad_u = divergence(grad_u, x, dim=1)
+            grad_u = jacobian(u, x, dim=1)
 
-                if self.detach:
-                    grad_u = grad_u.detach()
-                    div_grad_u = div_grad_u.detach()
+            # doesn't ∇·u = 0 ⟹ ∇(∇·u) = 0?
+            # meaning we don't need the next term
+            # and div_grad_u is just laplace_u
+            #grad_u = (grad_u + grad_u.transpose(1, 2))
 
-                grad_mu = jacobian(mu, x, dim=1)
-                div_stress = mu * div_grad_u + (grad_mu * grad_u).sum(dim=1)
+            div_grad_u = divergence(grad_u, x, dim=1)
+
+            if self.detach:
+                grad_u = grad_u.detach()
+                div_grad_u = div_grad_u.detach()
+
+            grad_mu = jacobian(mu, x, dim=1)
+            div_stress = mu * div_grad_u + (grad_mu * grad_u).sum(dim=1)
+
+        else: # general form
+
+            grad_u = jacobian(u, x, dim=1)
+            if self.detach:
+                grad_u = grad_u.detach()
+
+            strain = (1/2) * (grad_u + grad_u.transpose(1, 2))
+            mu_strain = mu.unsqueeze(-1) * 2 * strain
+
+            tr_strain = strain.diagonal(1, 2).sum(dim=1, keepdims=True)
+            I = torch.eye(u.shape[1]).unsqueeze(0)
+            lambda_strain = self.lambda_ * tr_strain.unsqueeze(-1) * I
+
+            stress = mu_strain + lambda_strain
+
+            # is this divergence correct if we detach u?
+            div_stress = divergence(stress, x, dim=1)
 
         if self.detach:
             u = u.detach()
-        
-        f = self.rho * (2 * np.pi * omega)**2 * u
-        return div_stress + f
 
-
-def lvwe(x, u, mu, lam, rho, omega):
-    '''
-    General form of the steady-state
-    linear viscoelastic wave equation.
-    '''
-    jac_u = jacobian(u, x)
-
-    strain = (1/2) * (jac_u + jac_u.T)
-    stress = 2 * mu * strain + lam * trace(strain) * I
-
-    lhs = divergence(stress, x)
-
-    return lhs + rho * omega**2 * u
-
-
-def homogeneous_lvwe(x, u, mu, lam, rho, omega):
-    '''
-    Linear viscoelastic wave equation
-    with assumption of homogeneity.
-    '''
-    laplace_u = laplacian(u, x)
-    div_u = divergence(u, x)
-    grad_div_u = gradient(div_u, x)
-
-    lhs = mu * laplace_u + (lam + mu) * grad_div_u
-
-    return lhs + rho * omega**2 * u
-
-
-def incompressible_homogeneous_lvwe(x, u, mu, rho, omega):
-    '''
-    Linear viscoelastic wave equation
-    with assumption of homogeneity and
-    incompressibility.
-    '''
-    laplace_u = laplacian(u, x)
-
-    lhs = mu * laplace_u
-
-    return lhs + rho * omega**2 * u
-
-
-def pressure_homogeneous_lvwe(x, u, mu, p, rho, omega):
-    '''
-    Linear viscoelastic wave equation
-    with assumption of homogeneity and
-    additional pressure term.
-    '''
-    laplace_u = laplacian(u, x)
-    grad_p = gradient(p, x)
-
-    lhs = mu * laplace_u + grad_p
-
-    return lhs + rho * omega**2 * u
+        return div_stress + self.rho * omega**2 * u

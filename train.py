@@ -1,7 +1,6 @@
-import sys, os
+import sys, os, fire
 import numpy as np
 import torch
-import fire
 
 os.environ['DDEBACKEND'] = 'pytorch'
 import deepxde
@@ -10,6 +9,7 @@ import mre_pinn
 
 
 def train(
+
     # data settings
     data_root='data/BIOQIC',
     downsample=False,
@@ -19,8 +19,7 @@ def train(
     z_slice=None,
 
     # pde settings
-    homogeneous=True,
-    incompressible=True,
+    pde_name='helmholtz',
 
     # model settings
     omega0=32,
@@ -35,7 +34,7 @@ def train(
     optimizer='adam',
     batch_size=200,
     n_domain=200,
-    n_iters=20000,
+    n_iters=20000
 ):
     # load the FEM box data set
     data = mre_pinn.data.load_bioqic_fem_box_data(data_root)
@@ -63,11 +62,7 @@ def train(
     print('mu', type(mu), mu.shape, mu.dtype)
 
     # initialize the PDE, boundary conditions, and geometry
-    pde = mre_pinn.pde.WaveEquation(
-        homogeneous=homogeneous,
-        incompressible=incompressible,
-        detach=True
-    )
+    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
     bc = mre_pinn.data.PointSetBC(x, u, batch_size=batch_size)
     geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
 
@@ -93,18 +88,16 @@ def train(
         loss_weights=[pde_loss_wt, data_loss_wt],
         loss=mre_pinn.training.normalized_l2_loss_fn(u)
     )
-    deepxde.display.training_display = mre_pinn.visual.TrainingPlot(
-        losses=['pde_loss', 'data_loss'], metrics=[]
-    )
+    #deepxde.display.training_display = mre_pinn.visual.TrainingPlot(
+    #    losses=['pde_loss', 'data_loss'], metrics=[]
+    #)
     callbacks = [
         mre_pinn.training.TestEvaluation(100, test_data, batch_size, col='frequency'),
         mre_pinn.training.PDEResampler(period=1),
     ]
 
     # train the model
-    model.train(n_iters, callbacks=[
-        mre_pinn.training.PDEResampler(period=1)
-    ])
+    model.train(n_iters, display_every=10, callbacks=callbacks)
 
 
 if __name__ == '__main__':
