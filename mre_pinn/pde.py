@@ -75,18 +75,18 @@ class WaveEquation(object):
         detach: Do not backprop through u
     '''
     @classmethod
-    def from_name(cls, name, **kwargs):
-        name = name.lower()
-        if name == 'helmholtz':
+    def from_name(cls, pde_name, **kwargs):
+        pde_name = pde_name.lower()
+        if pde_name == 'helmholtz':
             return WaveEquation(homogeneous=True, incompressible=True, **kwargs)
-        elif name == 'hetero':
+        elif pde_name == 'hetero':
             return WaveEquation(homogeneous=False, incompressible=True, **kwargs)
-        elif name == 'compress':
+        elif pde_name == 'compress':
             return WaveEquation(homogeneous=True, incompressible=False, **kwargs)
-        elif name == 'general':
+        elif pde_name == 'general':
             return WaveEquation(homogeneous=False, incompressible=False, **kwargs)
         else:
-            raise KeyError(f'unrecognized wave equation: {name}')
+            raise ValueError(f'unrecognized PDE name: {pde_name}')
 
     def __init__(
         self,

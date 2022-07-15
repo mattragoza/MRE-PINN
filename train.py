@@ -12,11 +12,9 @@ def train(
 
     # data settings
     data_root='data/BIOQIC',
-    downsample=False,
-    frequency=None,
-    x_slice=None,
-    y_slice=None,
-    z_slice=None,
+    data_name='fem_box',
+    frequency='multi',
+    xyz_slice='3D',
 
     # pde settings
     pde_name='helmholtz',
@@ -36,21 +34,12 @@ def train(
     n_domain=200,
     n_iters=20000
 ):
-    # load the FEM box data set
-    data = mre_pinn.data.load_bioqic_fem_box_data(data_root)
-
-    # select data subset
-    data, ndim = mre_pinn.data.select_data_subset(
-        data, downsample, frequency, x_slice, y_slice, z_slice
+    data, test_data = mre_pinn.data.load_bioqic_dataset(
+        data_root=data_root,
+        data_name=data_name,
+        frequency=frequency,
+        xyz_slice=xyz_slice
     )
-    print(data)
-
-    # direct Helmholtz inversion via discrete laplacian
-    data['Lu'] = mre_pinn.discrete.laplacian(data['u'])
-    data['Mu'] = mre_pinn.discrete.helmholtz_inversion(data['u'], data['Lu'])
-
-    # test on 4x downsampled data
-    test_data = data.coarsen(**{d: 4 for d in data.field.spatial_dims}).mean()
 
     # convert to vector/scalar fields and coordinates
     x  = data.u.field.points().astype(np.float32)
@@ -61,10 +50,10 @@ def train(
     print('u ', type(u), u.shape, u.dtype)
     print('mu', type(mu), mu.shape, mu.dtype)
 
-    # initialize the PDE, boundary conditions, and geometry
-    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-    bc = mre_pinn.data.PointSetBC(x, u, batch_size=batch_size)
+    # initialize the PDE, geometry, and boundary conditions
+    pde = mre_pinn.pde.WaveEquation.from_name(pde_name)
     geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
+    bc = mre_pinn.data.PointSetBC(points=x, values=u)
 
     # define model architecture
     net = mre_pinn.model.MREPINN(

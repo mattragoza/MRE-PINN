@@ -6,6 +6,7 @@ import torch
 import deepxde
 
 from .utils import print_if, parse_iterable, as_matrix
+from . import discrete
 
 
 def nd_coords(coords, center=False):
@@ -62,14 +63,16 @@ class PointSetBC(deepxde.icbc.PointSetBC):
         self.points = np.asarray(points)
         self.values = torch.as_tensor(values)
         self.component = component # which component of model output
-
-        self.batch_size = batch_size
-        if batch_size is not None: # batch iterator and state
-            self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle)
-            self.batch_indices = None
+        self.set_batch_size(batch_size)
 
     def __len__(self):
         return self.points.shape[0]
+
+    def set_batch_size(self, batch_size):
+        self.batch_size = batch_size
+        if batch_size is not None: # batch iterator and state
+            self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle=shuffle)
+            self.batch_indices = None
 
     def collocation_points(self, X):
         if self.batch_size is not None:
@@ -86,6 +89,28 @@ class PointSetBC(deepxde.icbc.PointSetBC):
             outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
             values
         )
+
+
+def load_bioqic_dataset(
+    data_root, data_name, downsample=False, frequency=None, xyz_slice=None
+):
+    if data_name == 'fem_box':
+        data = load_bioqic_fem_box_data(data_root)
+    else:
+        raise ValueError(f'unrecognized data name: {data_name}')
+
+    # select data subset
+    data, ndim = select_data_subset(data, downsample, frequency, xyz_slice)
+    print(data)
+
+    # direct Helmholtz inversion via discrete laplacian
+    data['Lu'] = discrete.laplacian(data['u'])
+    data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'])
+
+    # test on 4x downsampled data
+    test_data = data.coarsen(**{d: 4 for d in data.field.spatial_dims}).mean()
+
+    return data, test_data
 
 
 def load_bioqic_fem_box_data(data_root, verbose=True):
@@ -145,9 +170,7 @@ def select_data_subset(
     data,
     downsample=None,
     frequency=None,
-    x_slice=None,
-    y_slice=None,
-    z_slice=None
+    xyz_slice=None
 ):
     '''
     Args:
@@ -166,11 +189,13 @@ def select_data_subset(
         data = data.coarsen(x=downsample, y=downsample, z=downsample).mean()
 
     # single frequency
-    if frequency is not None:
+    if frequency and frequency not in {'all', 'multi'}:
         print('Single frequency', end=' ')
         data = data.sel(frequency=[frequency])
     else:
         print('Multi frequency', end=' ')
+
+    x_slice, y_slice, z_slice = parse_xyz_slice(xyz_slice)
 
     # single x slice
     if x_slice is not None:
@@ -193,6 +218,22 @@ def select_data_subset(
     data = data.sel(component=['z', 'y', 'x'][:ndim])
 
     return data, ndim
+
+
+def parse_xyz_slice(xyz_slice):
+    if not xyz_slice:
+        return (None, None, None)
+    if isinstance(xyz_slice, str):
+        xyz_slice = xyz_slice.upper()
+        if xyz_slice == '3D':
+            return (None, None, None)
+        elif xyz_slice == '2D':
+            return (None, None, 0)
+        elif xyz_slice == '1D':
+            return (None, 75, 0)
+        else:
+            return map(int, xyz_slice.split('-'))
+    return xyz_slice
 
 
 def load_np_data(np_file, verbose=False):
