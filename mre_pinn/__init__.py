@@ -3,5 +3,5 @@ os.environ['DDEBACKEND'] = 'pytorch'
 import deepxde
 
 from . import (
-	data, model, pde, training, discrete, visual, utils
+	data, model, training, fields, pde, discrete, visual, utils
 )

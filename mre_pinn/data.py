@@ -2,97 +2,13 @@ import sys, pathlib
 import numpy as np
 import xarray as xr
 import scipy.io
-import torch
-import deepxde
 
-from .utils import print_if, parse_iterable, as_matrix
+from .utils import print_if
 from . import discrete
 
 
-def nd_coords(coords, center=False):
-    '''
-    Cartesian product of a set of coordinate arrays.
-
-    Args:
-        coords: A list of N 1D coordinate arrays.
-        center: If True, center the coordinates.
-    Returns:
-        An array containing N-dimensional coordinates.
-    '''
-    coords = np.meshgrid(*coords, indexing='ij')
-    coords = np.stack(coords, axis=-1).reshape(-1, len(coords))
-    if center:
-        coords -= np.mean(coords, axis=0, keepdims=True)
-    return coords
-
-
-@xr.register_dataset_accessor('field')
-@xr.register_dataarray_accessor('field')
-class FieldAccessor(object):
-    '''
-    Accessor for treating an xarray as a scalar or vector field.
-    '''
-    def __init__(self, xarray):
-        self.xarray = xarray
-
-    @property
-    def dims(self):
-        return [d for d in self.xarray.dims if d != 'component']
-
-    @property
-    def spatial_dims(self):
-        return [d for d in 'xyz' if d in self.xarray.dims]
-
-    def points(self):
-        return nd_coords((self.xarray.coords[d] for d in self.xarray.field.dims))
-
-    def values(self):
-        if 'component' in self.xarray.dims: # vector field
-            n_components = self.xarray.sizes['component']
-            T = self.xarray.field.dims + ['component']
-            return self.xarray.transpose(*T).values.reshape(-1, n_components)
-        else: # scalar field
-            return self.xarray.values.reshape(-1, 1)
-
-
-class PointSetBC(deepxde.icbc.PointSetBC):
-
-    def __init__(
-        self, points, values, component=0, batch_size=None, shuffle=True
-    ):
-        self.points = np.asarray(points)
-        self.values = torch.as_tensor(values)
-        self.component = component # which component of model output
-        self.set_batch_size(batch_size)
-
-    def __len__(self):
-        return self.points.shape[0]
-
-    def set_batch_size(self, batch_size):
-        self.batch_size = batch_size
-        if batch_size is not None: # batch iterator and state
-            self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle=shuffle)
-            self.batch_indices = None
-
-    def collocation_points(self, X):
-        if self.batch_size is not None:
-            self.batch_indices = self.batch_sampler.get_next(self.batch_size)
-            return self.points[self.batch_indices]
-        return self.points
-
-    def error(self, X, inputs, outputs, beg, end, aux_var=None):
-        if self.batch_size is not None:
-            values = self.values[self.batch_indices]
-        else:
-            values = self.values
-        return (
-            outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
-            values
-        )
-
-
 def load_bioqic_dataset(
-    data_root, data_name, downsample=False, frequency=None, xyz_slice=None
+    data_root, data_name, frequency=None, xyz_slice=None, downsample=2
 ):
     if data_name == 'fem_box':
         data = load_bioqic_fem_box_data(data_root)
@@ -100,7 +16,7 @@ def load_bioqic_dataset(
         raise ValueError(f'unrecognized data name: {data_name}')
 
     # select data subset
-    data, ndim = select_data_subset(data, downsample, frequency, xyz_slice)
+    data, ndim = select_data_subset(data, frequency, xyz_slice)
     print(data)
 
     # direct Helmholtz inversion via discrete laplacian
@@ -108,7 +24,11 @@ def load_bioqic_dataset(
     data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'])
 
     # test on 4x downsampled data
-    test_data = data.coarsen(**{d: 4 for d in data.field.spatial_dims}).mean()
+    if downsample:
+        downsample = {d: downsample for d in data.field.spatial_dims}
+        test_data = data.coarsen(**downsample).mean()
+    else:
+        test_data = data.copy()
 
     return data, test_data
 
@@ -168,18 +88,18 @@ def load_bioqic_fem_box_data(data_root, verbose=True):
 
 def select_data_subset(
     data,
-    downsample=None,
     frequency=None,
-    xyz_slice=None
+    xyz_slice=None,
+    downsample=None
 ):
     '''
     Args:
         data: An xarray dataset with the dimensions:
             (frequency, x, y, z, component)
-        downsample: Spatial downsampling factor.
         frequency: Single frequency to select.
         x_slice, y_slice, z_slice: Indices of spatial dimensions to subset,
             resulting in 2D or 1D.
+        downsample: Spatial downsampling factor.
     Returns:
         data: An xarray containing the data subset.
         ndim: Whether the subset is 1D, 2D, or 3D.

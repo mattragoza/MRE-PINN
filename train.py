@@ -53,7 +53,7 @@ def train(
     # initialize the PDE, geometry, and boundary conditions
     pde = mre_pinn.pde.WaveEquation.from_name(pde_name)
     geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
-    bc = mre_pinn.data.PointSetBC(points=x, values=u)
+    bc = mre_pinn.fields.VectorFieldBC(points=x, values=u)
 
     # define model architecture
     net = mre_pinn.model.MREPINN(
@@ -70,7 +70,7 @@ def train(
     print(net)
 
     # compile model and configure training settings
-    model = mre_pinn.training.MREPINNModel(net, pde, geom, bc, num_domain=batch_size)
+    model = mre_pinn.training.MREPINNModel(net, pde, geom, bc, batch_size)
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
