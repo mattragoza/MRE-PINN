@@ -12,6 +12,22 @@ class MREPINNModel(deepxde.Model):
         data = deepxde.data.PDE(geom, pde, bc, num_domain=num_domain)
         super().__init__(data, net)
 
+    @minibatch
+    def predict(self, x):
+
+        # compute model predictions
+        x = torch.as_tensor(x)
+        x.requires_grad_(True)
+        outputs = self.net(x)
+        u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
+
+        # compute differential operators
+        lu_pred = pde.laplacian(u_pred, x, dim=1)
+        pde_res = self.data.pde(x, outputs)
+        deepxde.gradients.clear()
+
+        return u_pred, lu_pred, pde_res, mu_pred
+
 
 class PeriodicCallback(deepxde.callbacks.Callback):
 
@@ -55,28 +71,14 @@ class TestEvaluation(PeriodicCallback):
         self.viewer_kws = kwargs
         self.initialized = False
 
-    def predict(self, x):
-
-        # compute model predictions
-        x = torch.as_tensor(x).requires_grad_(True)
-        outputs = self.model.net(x)
-        u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
-
-        # compute differential operators
-        lu_pred = minibatch(pde.laplacian, self.batch_size)(u_pred, x)
-        pde_res = minibatch(self.model.data.pde, self.batch_size)(x, outputs)
-        deepxde.gradients.clear()
-
-        return u_pred, lu_pred, mu_pred, pde_res
-
     def on_period_begin(self):
 
         # get ground truth values
         u, mu, Lu = self.data.u, self.data.mu, self.data.Lu
         x = u.field.points().astype(np.float32)
 
-        batch_predict = minibatch(self.predict, self.batch_size)
-        u_pred, lu_pred, mu_pred, pde_res = batch_predict(x)
+        u_pred, lu_pred, pde_res, mu_pred = \
+            self.model.predict(x, batch_size=self.batch_size)
 
         # convert tensors to xarrays
         u_pred = as_xarray(u_pred.reshape(u.shape), like=u)
@@ -94,11 +96,15 @@ class TestEvaluation(PeriodicCallback):
             self.u_kws.update(self.viewer_kws)
             self.u_viewer = visual.XArrayViewer(u_pred, **self.u_kws)
 
-            lu_map = visual.wave_color_map()
             lu_max = np.percentile(np.abs(Lu), 95) * 1.1
-            self.lu_kws = dict(cmap=lu_map, vmin=-lu_max, vmax=lu_max)
+            self.lu_kws = dict(cmap=u_map, vmin=-lu_max, vmax=lu_max)
             self.lu_kws.update(self.viewer_kws)
             self.lu_viewer = visual.XArrayViewer(lu_pred, **self.lu_kws)
+
+            pde_max = np.percentile(np.abs(pde_res), 95) * 1.1
+            self.pde_kws = dict(cmap=u_map, vmin=-pde_max, vmax=pde_max)
+            self.pde_kws.update(self.viewer_kws)
+            self.pde_viewer = visual.XArrayViewer(pde_res, **self.pde_kws)
 
             mu_map = visual.elast_color_map()
             mu_max = np.percentile(np.abs(mu), 95) * 5
@@ -110,6 +116,7 @@ class TestEvaluation(PeriodicCallback):
         else:
             self.u_viewer.update_array(u_pred)
             self.lu_viewer.update_array(lu_pred)
+            self.pde_viewer.update_array(pde_res)
             self.mu_viewer.update_array(mu_pred)
 
 

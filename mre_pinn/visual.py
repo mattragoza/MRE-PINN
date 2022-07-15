@@ -278,7 +278,12 @@ class TrainingPlot(deepxde.display.TrainingDisplay):
             ax.set_xlabel('iteration')
             ax.set_yscale('log')
             #ax.grid(linestyle=':')
-            ax.legend(frameon=True, edgecolor='0.2')
+
+        if self.loss_lines:
+            self.axes[0,0].legend(frameon=True, edgecolor='0.2')
+
+        if self.metric_lines:
+            self.axes[0,1].legend(frameon=True, edgecolor='0.2')
 
         self.initialized = True
 

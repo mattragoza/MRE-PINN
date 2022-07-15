@@ -120,21 +120,21 @@ def concat(args, dim=0):
         return np.concatenate(args, axis=dim)
 
 
-def minibatch(func, batch_size):
+def minibatch(method):
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
+    @wraps(method)
+    def wrapper(self, *args, batch_size=None, **kwargs):
 
         N = args[0].shape[0]
         assert N > 0
 
-        if batch_size >= N:
-            return func(*args, **kwargs)
+        if batch_size is None or batch_size >= N:
+            return method(self, *args, **kwargs)
 
         outputs = []
         for i in range(0, N, batch_size):
             batch_args = [a[i:i + batch_size] for a in args]
-            batch_output = func(*batch_args, **kwargs)
+            batch_output = method(self, *batch_args, **kwargs)
             outputs.append(batch_output)
 
         if isinstance(batch_output, tuple):
