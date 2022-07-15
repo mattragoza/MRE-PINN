@@ -4,7 +4,7 @@ Physics-informed networks for elasticity reconstruction in magnetic resonance el
 
 ## Installation
 
-Run the following to setup the conda environment and install it as an ipython kernel (for jupyter notebooks):
+Run the following to setup the conda environment and install it as a Jupyter notebook kernel:
 
 ```bash
 mamba env create --file=environment.yml
