@@ -1,4 +1,5 @@
 import numpy as np
+import xarray as xr
 import torch
 import deepxde
 
@@ -8,9 +9,9 @@ from . import pde, discrete, visual
 
 class MREPINNModel(deepxde.Model):
 
-    def __init__(self, net, pde, geom, bc, batch_size):
+    def __init__(self, net, pde, geom, bc, batch_size=None, **kwargs):
         bc.set_batch_size(batch_size)
-        data = deepxde.data.PDE(geom, pde, bc, num_domain=batch_size)
+        data = deepxde.data.PDE(geom, pde, bc, **kwargs)
         super().__init__(data, net)
 
     @minibatch
@@ -24,10 +25,10 @@ class MREPINNModel(deepxde.Model):
 
         # compute differential operators
         lu_pred = pde.laplacian(u_pred, x, dim=1)
-        pde_res = self.data.pde(x, outputs)
+        f_trac, f_body = self.data.pde.traction_and_body_forces(x, outputs)
         deepxde.gradients.clear()
 
-        return u_pred, lu_pred, pde_res, mu_pred
+        return u_pred, lu_pred, mu_pred, f_trac, f_body
 
 
 class PeriodicCallback(deepxde.callbacks.Callback):
@@ -78,47 +79,65 @@ class TestEvaluation(PeriodicCallback):
         u, mu, Lu = self.data.u, self.data.mu, self.data.Lu
         x = u.field.points().astype(np.float32)
 
-        u_pred, lu_pred, pde_res, mu_pred = \
+        u_pred, lu_pred, mu_pred, f_trac, f_body = \
             self.model.predict(x, batch_size=self.batch_size)
 
         # convert tensors to xarrays
-        u_pred = as_xarray(u_pred.reshape(u.shape), like=u)
-        lu_pred = as_xarray(lu_pred.reshape(u.shape), like=u)
+        u_pred  = as_xarray(u_pred.reshape(u.shape),   like=u)
+        lu_pred = as_xarray(lu_pred.reshape(u.shape),  like=u)
         mu_pred = as_xarray(mu_pred.reshape(mu.shape), like=mu)
-        pde_res = as_xarray(pde_res.reshape(u.shape), like=u)
+        f_trac  = as_xarray(f_trac.reshape(u.shape),   like=u)
+        f_body  = as_xarray(f_body.reshape(u.shape),   like=u)
+
+        # compute discrete Laplacian
+        Lu = discrete.laplacian(u_pred)
+
+
+        # compute and concatenate residuals wrt reference values
+        new_dim = xr.DataArray(['u_pred', 'residual', 'u_true'], dims=['residual'])
+        u  = xr.concat([u_pred,  u  - u_pred,  u],  dim=new_dim)
+
+        new_dim = xr.DataArray(['lu_pred', 'residual', 'Lu_pred'], dims=['residual'])
+        lu = xr.concat([lu_pred, Lu - lu_pred, Lu], dim=new_dim)
+
+        new_dim = xr.DataArray(['f_trac', 'residual', 'f_body'], dims=['residual'])
+        pde = xr.concat([f_trac, f_trac + f_body, f_body], dim=new_dim)
+
+        new_dim = xr.DataArray(['mu_pred', 'residual', 'mu_true'], dims=['residual'])
+        mu = xr.concat([mu_pred, mu - mu_pred, mu], dim=new_dim)
 
         # take mean of mu across frequency
-        mu_pred = mu_pred.mean('frequency')
+        mu = mu.mean('frequency')
 
         if not self.initialized:
+            pct = 95
             u_map = visual.wave_color_map()
-            u_max = np.percentile(np.abs(u), 95) * 1.1
-            self.u_kws = dict(cmap=u_map, vmin=-u_max, vmax=u_max)
+            u_max = np.percentile(np.abs(u), pct) * 1.1
+            self.u_kws = dict(cmap=u_map, vmax=u_max)
             self.u_kws.update(self.viewer_kws)
-            self.u_viewer = visual.XArrayViewer(u_pred, **self.u_kws)
+            self.u_viewer = visual.XArrayViewer(u, **self.u_kws)
 
-            lu_max = np.percentile(np.abs(Lu), 95) * 1.1
-            self.lu_kws = dict(cmap=u_map, vmin=-lu_max, vmax=lu_max)
+            lu_max = np.percentile(np.abs(lu), pct) * 1.1
+            self.lu_kws = dict(cmap=u_map, vmax=lu_max)
             self.lu_kws.update(self.viewer_kws)
-            self.lu_viewer = visual.XArrayViewer(lu_pred, **self.lu_kws)
+            self.lu_viewer = visual.XArrayViewer(lu, **self.lu_kws)
 
-            pde_max = np.percentile(np.abs(pde_res), 95) * 1.1
-            self.pde_kws = dict(cmap=u_map, vmin=-pde_max, vmax=pde_max)
+            pde_max = np.percentile(np.abs(pde), pct) * 1.1
+            self.pde_kws = dict(cmap=u_map, vmax=pde_max)
             self.pde_kws.update(self.viewer_kws)
-            self.pde_viewer = visual.XArrayViewer(pde_res, **self.pde_kws)
+            self.pde_viewer = visual.XArrayViewer(pde, **self.pde_kws)
 
-            mu_map = visual.elast_color_map()
-            mu_max = np.percentile(np.abs(mu), 95) * 5
-            self.mu_kws = dict(cmap=mu_map, vmin=0, vmax=mu_max)
+            mu_map = visual.elast_color_map(symmetric=True)
+            mu_max = np.percentile(np.abs(mu), pct) * 6
+            self.mu_kws = dict(cmap=mu_map, vmax=mu_max)
             self.mu_kws.update(self.viewer_kws)
-            self.mu_kws['col'] = 'part'
-            self.mu_viewer = visual.XArrayViewer(mu_pred, **self.mu_kws)
+            self.mu_viewer = visual.XArrayViewer(mu, **self.mu_kws)
             self.initialized = True
         else:
-            self.u_viewer.update_array(u_pred)
-            self.lu_viewer.update_array(lu_pred)
-            self.pde_viewer.update_array(pde_res)
-            self.mu_viewer.update_array(mu_pred)
+            self.u_viewer.update_array(u)
+            self.lu_viewer.update_array(lu)
+            self.pde_viewer.update_array(pde)
+            self.mu_viewer.update_array(mu)
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):

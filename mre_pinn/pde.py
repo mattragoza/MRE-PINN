@@ -103,19 +103,7 @@ class WaveEquation(object):
         self.detach = detach
         self.debug = debug
 
-    def __call__(self, x, outputs):
-        '''
-        Compute the PDE residual.
-
-        Args:
-            x: (N x 4) input tensor of omega,x,y,z
-            outputs: (N x 4) tensor of ux,uy,uz,mu
-        Returns:
-            (N x 3) tensor of PDE residual for each
-                ux,uy,uz displacement component
-        '''
-        u, mu = outputs[:,:-1], outputs[:,-1:]
-        omega = 2 * np.pi * x[:,:1] # radians
+    def traction_forces(self, x, u, mu):
 
         if self.debug: # no PDE residual
             return u * 0
@@ -173,7 +161,45 @@ class WaveEquation(object):
             # is this divergence correct if we detach u?
             div_stress = divergence(stress, x, dim=1)
 
+        return div_stress
+
+    def body_forces(self, omega, u):
+
+        if self.debug:
+            return u * 0
+
         if self.detach:
             u = u.detach()
 
-        return div_stress + self.rho * omega**2 * u
+        return self.rho * omega**2 * u
+
+    def traction_and_body_forces(self, x, outputs):
+        '''
+        Compute the traction and body forces.
+
+        Args:
+            x: (N x 4) input tensor of omega,x,y,z
+            outputs: (N x 4) tensor of ux,uy,uz,mu
+        Returns:
+            2 (N x 3) tensors containing the traction and
+                body forces for each displacement component
+        '''
+        u, mu = outputs[:,:-1], outputs[:,-1:]
+        omega = 2 * np.pi * x[:,:1] # radians
+        f_trac = self.traction_forces(x, u, mu)
+        f_body = self.body_forces(omega, u)
+        return f_trac, f_body
+
+    def __call__(self, x, outputs):
+        '''
+        Compute the PDE residuals.
+
+        Args:
+            x: (N x 4) input tensor of omega,x,y,z
+            outputs: (N x 4) tensor of ux,uy,uz,mu
+        Returns:
+            (N x 3) tensor of PDE residual for each
+                ux,uy,uz displacement component
+        '''
+        f_trac, f_body = self.traction_and_body_forces(x, outputs)
+        return f_trac + f_body
