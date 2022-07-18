@@ -165,11 +165,12 @@ class XArrayViewer(object):
         ax_width  = [ax_width]  * n_cols
 
         # create the subplot grid
-        self.fig, self.axes = subplot_grid(
+        self.fig, self.axes, self.cbar_ax = subplot_grid(
             n_rows=n_rows,
             n_cols=n_cols,
             ax_height=ax_height,
             ax_width=ax_width,
+            cbar_width=0.25 * do_image_plot,
             space=[0.25, 0.50],
             pad=[0.85, 0.35, 0.55, 0.45]
         )
@@ -196,7 +197,7 @@ class XArrayViewer(object):
                         self.artists[i][j] = lines
                     else:
                         self.artists[i][j] = lines[0]
-                else: # plot image and colorbar
+                else: # plot image
                     image = plot_image_2d(
                         self.axes[i,j],
                         self.array[index],
@@ -206,8 +207,13 @@ class XArrayViewer(object):
                         title=col_label,
                         **kwargs
                     )
-                    #plot_colorbar(self.axes[0,-1], image)
                     self.artists[i][j] = image
+
+        if do_image_plot: # create colorbar
+            self.cbar = plot_colorbar(self.cbar_ax, image)
+            for i in range(n_rows):
+                for j in range(n_cols):
+                    self.artists[i][j].set_norm(self.cbar.norm)
 
         # create interactive sliders for index dims
         self.sliders = []
@@ -449,17 +455,36 @@ def elast_color_map(n_colors=255, symmetric=False):
     )
 
 
-def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
+class Colorbar(matplotlib.colorbar.Colorbar):
+
+    def drag_pan(self, button, key, x, y):
+        '''Centered at zero'''
+        points = self.ax._get_pan_points(button, key, x, y)
+
+        if points is not None:
+            if self.orientation == 'horizontal':
+                vmin, vmax = points[:, 0]
+            elif self.orientation == 'vertical':
+                vmin, vmax = points[:, 1]
+
+        # center them
+        vrange = vmax - vmin
+        self.norm.vmin = -vrange / 2
+        self.norm.vmax = vrange / 2
+
+
+def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, pad=0):
     '''
     Args:
         n_rows
         n_cols
         ax_height
         ax_width
+        cbar_width
         space: (vertical, horizontal)
         pad: (left, right, bottom, top)
     Returns:
-        fig, axes
+        fig, axes, cbar_ax
     '''
     ax_height = as_iterable(ax_height, n_rows)
     ax_width = as_iterable(ax_width, n_cols)
@@ -467,9 +492,15 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
     lpad, rpad, bpad, tpad = as_iterable(pad, 4)
 
     fig_height = sum(ax_height) + (n_rows - 1) * hspace + bpad + tpad
-    fig_width = sum(ax_width) + (n_cols - 1) * wspace + lpad + rpad
+    fig_width  = sum(ax_width)  + (n_cols - 1) * wspace + lpad + rpad
 
-    return plt.subplots(
+    if cbar_width:
+        extra_width = cbar_width + wspace
+        fig_width += extra_width
+    else:
+        extra_width = 0
+
+    fig, axes = plt.subplots(
         n_rows, n_cols,
         squeeze=False,
         figsize=(fig_width, fig_height),
@@ -479,11 +510,21 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, space=0.3, pad=0):
             hspace=hspace,
             wspace=wspace,
             left=lpad/fig_width,
-            right=1 - rpad/fig_width,
+            right=1.0 - (rpad + extra_width)/fig_width,
             bottom=bpad/fig_height,
-            top=1 - tpad/fig_height
+            top=1.0 - tpad/fig_height
         )
     )
+    if cbar_width:
+        cbar_ax = fig.add_axes([
+            (sum(ax_width) + n_cols * wspace + lpad)/fig_width,
+            bpad/fig_height,
+            cbar_width/fig_width,
+            1.0 - (bpad + tpad)/fig_height
+        ])
+    else:
+        cbar_ax = None
+    return fig, axes, cbar_ax
 
 
 def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
@@ -532,11 +573,12 @@ def plot_points_2d(ax, x, u, dims, xlabel=None, ylabel=None, **kwargs):
     return sc
 
 
-def plot_colorbar(ax, obj, label=None, location='left'):
-    plt.colorbar(obj, cax=ax)
+def plot_colorbar(ax, mappable, label=None):
+    cbar = Colorbar(ax, mappable)
     #ax.yaxis.set_ticks_position('left')
     #ax.yaxis.set_label_position('left')
     ax.set_ylabel(label)
+    return cbar
 
 
 def plot_slider(ax, update, values=None, label=None, **kwargs):
