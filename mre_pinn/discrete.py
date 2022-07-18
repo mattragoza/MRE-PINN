@@ -85,7 +85,7 @@ def sfft(u, shift=True):
     Convert to spatial frequency domain.
     '''
     axes = tuple(range(1, u.ndim))
-    u_f = np.fft.fftn(u, axes=axes)
+    u_f = np.fft.fftn(u, norm='ortho', axes=axes)
     if shift:
         return np.fft.fftshift(u_f, axes=axes)
     return u_f

@@ -9,6 +9,7 @@ import deepxde
 import ipywidgets
 
 from .utils import exists, print_if, as_iterable
+from . import discrete
 
 DPI = 50
 
@@ -38,14 +39,21 @@ class XArrayViewer(object):
 
     def preprocess_array(self, xarray):
         '''
-        Concatenate real and imaginary parts
-        if the array has a complex dtype.
+        Concatenate spatial with frequency domain.
+        Also concatenate real and imaginary parts.
         '''
+        if 'domain' not in xarray.dims:
+            xarray = xr.concat(
+                [xarray, discrete.sfft(xarray)],
+                dim=xr.DataArray(['space', 'frequency'], dims=['domain'])
+            )
+
         if np.iscomplexobj(xarray):
             xarray = xr.concat(
                 [xarray.real, xarray.imag],
                 dim=xr.DataArray(['real', 'imag'], dims=['part'])
             )
+
         return xarray
 
     def establish_dimensions(self, dims, x, y, hue, row, col):
@@ -93,22 +101,22 @@ class XArrayViewer(object):
         # initial index state
         self.index = (0,) * len(self.index_dims)
 
-    def get_index_and_title(self, i, j):
+    def get_index_and_labels(self, i, j):
         '''
-        Return the array index and axes title
+        Return the array index and axes labels
         associated with a given row and column.
         '''
         index = self.index
-        labels = []
+        row_label = col_label = ''
         if exists(self.row_dim):
             index += (i,)
-            row_label = str(self.coords[self.row_dim][i])
-            labels.append(row_label)
+            if j == 0: # first column
+                row_label = str(self.coords[self.row_dim][i]) + '\n'
         if exists(self.col_dim):
             index += (j,)
-            col_label = str(self.coords[self.col_dim][j])
-            labels.append(col_label)
-        return index, ' '.join(labels)
+            if i == 0: # first row
+                col_label = str(self.coords[self.col_dim][j])
+        return index, row_label, col_label
 
     def initialize_subplots(
         self, ax_height=None, ax_width=None, dpi=None, **kwargs
@@ -163,7 +171,7 @@ class XArrayViewer(object):
             ax_height=ax_height,
             ax_width=ax_width,
             space=[0.25, 0.50],
-            pad=[0.75, 0.35, 0.55, 0.45]
+            pad=[0.85, 0.35, 0.55, 0.45]
         )
 
         # plot the array data and store the artists
@@ -172,7 +180,7 @@ class XArrayViewer(object):
         ]
         for i in range(n_rows):
             for j in range(n_cols):
-                index, title = self.get_index_and_title(i, j)
+                index, row_label, col_label = self.get_index_and_labels(i, j)
                 x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
                 if do_line_plot:
                     lines = plot_line_1d(
@@ -180,7 +188,8 @@ class XArrayViewer(object):
                         self.array[index],
                         resolution=x_res,
                         xlabel=x_dim,
-                        title=title,
+                        ylabel=row_label,
+                        title=col_label
                         **kwargs
                     )
                     if len(lines) > 1:
@@ -193,8 +202,8 @@ class XArrayViewer(object):
                         self.array[index],
                         resolution=x_res,
                         xlabel=x_dim,
-                        ylabel=y_dim,
-                        title=title,
+                        ylabel=row_label + y_dim,
+                        title=col_label,
                         **kwargs
                     )
                     #plot_colorbar(self.axes[0,-1], image)
@@ -230,7 +239,7 @@ class XArrayViewer(object):
     def update_artists(self):
         for i in range(self.n_rows):
             for j in range(self.n_cols):
-                index, title = self.get_index_and_title(i, j)
+                index, row_label, col_label = self.get_index_and_labels(i, j)
                 artist = self.artists[i][j]
                 if isinstance(artist, list): # multiple lines
                     for k, artist in enumerate(artist):
@@ -414,7 +423,7 @@ def wave_color_map(n_colors=255):
     )
 
 
-def elast_color_map(n_colors=255):
+def elast_color_map(n_colors=255, symmetric=False):
     '''
     Create a colormap for MRE elastrograms
     from dark, blue, cyan, green, yellow, to red.
@@ -432,6 +441,8 @@ def elast_color_map(n_colors=255):
     red    = (1, 0, 0)
 
     colors = [dark, blue, cyan, green, yellow, red]
+    if symmetric:
+        colors = colors[::-1] + colors[1:]
 
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='elast', colors=colors, N=n_colors
@@ -504,6 +515,8 @@ def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwa
     n_x, n_y = a.shape
     extent = (0, n_x * resolution, 0, n_y * resolution)
     ax.autoscale(enable=True, tight=True)
+    if 'vmax' in kwargs and 'vmin' not in kwargs:
+        kwargs['vmin'] = -kwargs['vmax']
     im = ax.imshow(a.T, origin='lower', extent=extent, **kwargs)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
