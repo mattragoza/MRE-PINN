@@ -458,7 +458,6 @@ def elast_color_map(n_colors=255, symmetric=False):
 class Colorbar(matplotlib.colorbar.Colorbar):
 
     def drag_pan(self, button, key, x, y):
-        '''Centered at zero'''
         points = self.ax._get_pan_points(button, key, x, y)
 
         if points is not None:
@@ -467,10 +466,14 @@ class Colorbar(matplotlib.colorbar.Colorbar):
             elif self.orientation == 'vertical':
                 vmin, vmax = points[:, 1]
 
-        # center them
-        vrange = vmax - vmin
-        self.norm.vmin = -vrange / 2
-        self.norm.vmax = vrange / 2
+        if button == 3: # fix the zero position
+            old_vrange = self.norm.vmax - self.norm.vmin
+            new_vrange = vmax - vmin
+            self.norm.vmin *= new_vrange / old_vrange
+            self.norm.vmax *= new_vrange / old_vrange
+        else:
+            self.norm.vmin = vmin
+            self.norm.vmax = vmax
 
 
 def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, pad=0):
