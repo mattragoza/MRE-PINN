@@ -218,8 +218,8 @@ class XArrayViewer(object):
         # create interactive sliders for index dims
         self.sliders = []
         for d in self.index_dims:
-            slider = ipywidgets.IntSlider(
-                value=0, min=0, max=len(self.coords[d]) - 1, step=1,
+            slider = ipywidgets.SelectionSlider(
+                options=[(c, i) for i, c in enumerate(self.coords[d])],
                 description=d
             )
             self.sliders.append(slider)
@@ -231,8 +231,6 @@ class XArrayViewer(object):
 
     def update_index(self, **kwargs):
         coords = {d: self.coords[d][i] for d, i in kwargs.items()}
-        if coords:
-            print(coords)
         self.index = tuple([kwargs[d] for d in self.index_dims])
         self.update_artists()
 
@@ -521,9 +519,9 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, p
     if cbar_width:
         cbar_ax = fig.add_axes([
             (sum(ax_width) + n_cols * wspace + lpad)/fig_width,
-            bpad/fig_height,
+            bpad/fig_height * 1.1,
             cbar_width/fig_width,
-            1.0 - (bpad + tpad)/fig_height
+            1.0 - (bpad + tpad)/fig_height * 1.1
         ])
     else:
         cbar_ax = None
