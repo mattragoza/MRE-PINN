@@ -172,7 +172,7 @@ class XArrayViewer(object):
             ax_width=ax_width,
             cbar_width=0.25 * do_image_plot,
             space=[0.25, 0.50],
-            pad=[0.85, 0.35, 0.55, 0.45]
+            pad=[0.95, 0.75, 0.65, 0.45]
         )
 
         # plot the array data and store the artists

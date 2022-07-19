@@ -73,25 +73,56 @@ class TestEvaluation(PeriodicCallback):
         self.viewer_kws = kwargs
         self.initialized = False
 
+    def initialize(self, u, lu, pde, mu, pct=95):
+
+        u_map = visual.wave_color_map()
+        u_max = np.percentile(np.abs(u), pct) * 1.1
+        self.u_kws = dict(cmap=u_map, vmax=u_max)
+        self.u_kws.update(self.viewer_kws)
+        self.u_viewer = visual.XArrayViewer(u, **self.u_kws)
+
+        lu_max = np.percentile(np.abs(lu), pct) * 1.1
+        self.lu_kws = dict(cmap=u_map, vmax=lu_max)
+        self.lu_kws.update(self.viewer_kws)
+        self.lu_viewer = visual.XArrayViewer(lu, **self.lu_kws)
+
+        pde_max = np.percentile(np.abs(pde), pct) * 1.1
+        self.pde_kws = dict(cmap=u_map, vmax=pde_max)
+        self.pde_kws.update(self.viewer_kws)
+        self.pde_viewer = visual.XArrayViewer(pde, **self.pde_kws)
+
+        mu_map = visual.elast_color_map(symmetric=True)
+        mu_max = np.percentile(np.abs(mu), pct) * 6
+        self.mu_kws = dict(cmap=mu_map, vmax=mu_max)
+        self.mu_kws.update(self.viewer_kws)
+        self.mu_viewer = visual.XArrayViewer(mu, **self.mu_kws)
+        self.initialized = True
+
+    def update_viewers(self, u, lu, pde, mu):
+        self.u_viewer.update_array(u)
+        self.lu_viewer.update_array(lu)
+        self.pde_viewer.update_array(pde)
+        self.mu_viewer.update_array(mu)
+
     def on_period_begin(self):
 
         # get ground truth values
         u, mu, Lu = self.data.u, self.data.mu, self.data.Lu
         x = u.field.points().astype(np.float32)
 
+        # get model predictions
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
             self.model.predict(x, batch_size=self.batch_size)
 
         # convert tensors to xarrays
         u_pred  = as_xarray(u_pred.reshape(u.shape),   like=u)
         lu_pred = as_xarray(lu_pred.reshape(u.shape),  like=u)
-        mu_pred = as_xarray(mu_pred.reshape(mu.shape), like=mu)
         f_trac  = as_xarray(f_trac.reshape(u.shape),   like=u)
         f_body  = as_xarray(f_body.reshape(u.shape),   like=u)
+        mu_pred = as_xarray(mu_pred.reshape(mu.shape), like=mu)
 
-        # compute discrete Laplacian
+        # compute discrete Laplacian of model wave field
         Lu = discrete.laplacian(u_pred)
-
 
         # compute and concatenate residuals wrt reference values
         new_dim = xr.DataArray(['u_pred', 'residual', 'u_true'], dims=['residual'])
@@ -110,34 +141,9 @@ class TestEvaluation(PeriodicCallback):
         mu = mu.mean('frequency')
 
         if not self.initialized:
-            pct = 95
-            u_map = visual.wave_color_map()
-            u_max = np.percentile(np.abs(u), pct) * 1.1
-            self.u_kws = dict(cmap=u_map, vmax=u_max)
-            self.u_kws.update(self.viewer_kws)
-            self.u_viewer = visual.XArrayViewer(u, **self.u_kws)
-
-            lu_max = np.percentile(np.abs(lu), pct) * 1.1
-            self.lu_kws = dict(cmap=u_map, vmax=lu_max)
-            self.lu_kws.update(self.viewer_kws)
-            self.lu_viewer = visual.XArrayViewer(lu, **self.lu_kws)
-
-            pde_max = np.percentile(np.abs(pde), pct) * 1.1
-            self.pde_kws = dict(cmap=u_map, vmax=pde_max)
-            self.pde_kws.update(self.viewer_kws)
-            self.pde_viewer = visual.XArrayViewer(pde, **self.pde_kws)
-
-            mu_map = visual.elast_color_map(symmetric=True)
-            mu_max = np.percentile(np.abs(mu), pct) * 6
-            self.mu_kws = dict(cmap=mu_map, vmax=mu_max)
-            self.mu_kws.update(self.viewer_kws)
-            self.mu_viewer = visual.XArrayViewer(mu, **self.mu_kws)
-            self.initialized = True
+            self.initialize(u, lu, pde, mu)
         else:
-            self.u_viewer.update_array(u)
-            self.lu_viewer.update_array(lu)
-            self.pde_viewer.update_array(pde)
-            self.mu_viewer.update_array(mu)
+            self.update_viewers(u, lu, pde, mu)
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):

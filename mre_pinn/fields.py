@@ -35,15 +35,35 @@ class FieldAccessor(object):
         return [d for d in self.xarray.dims if d != 'component']
 
     @property
+    def n_dims(self):
+        return len(self.xarray.field.dims)
+
+    @property
     def spatial_dims(self):
-        return [d for d in 'xyz' if d in self.xarray.dims]
+        return [d for d in 'xyz' if d in self.xarray.sizes]
+
+    @property
+    def spatial_axes(self):
+        return [i for i, d in enumerate(self.xarray.dims) if d in 'xyz']
+
+    @property
+    def n_spatial_dims(self):
+        return len(self.xarray.field.spatial_dims)
+
+    @property
+    def has_components(self):
+        return 'component' in self.xarray.sizes
+
+    @property
+    def n_components(self):
+        return self.xarray.sizes['component']
 
     def points(self):
         return nd_coords((self.xarray.coords[d] for d in self.xarray.field.dims))
 
     def values(self):
-        if 'component' in self.xarray.dims: # vector field
-            n_components = self.xarray.sizes['component']
+        if self.xarray.field.has_components: # vector field
+            n_components = self.xarray.field.n_components
             T = self.xarray.field.dims + ['component']
             return self.xarray.transpose(*T).values.reshape(-1, n_components)
         else: # scalar field
