@@ -523,9 +523,9 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, p
             cbar_width/fig_width,
             1.0 - (bpad + tpad)/fig_height * 1.1
         ])
+        return fig, axes, cbar_ax
     else:
-        cbar_ax = None
-    return fig, axes, cbar_ax
+        return fig, axes
 
 
 def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
