@@ -80,7 +80,7 @@ def helmholtz_inversion(u, Lu, rho=1000):
 
 
 @copy_metadata
-def sfft(u, shift=True):
+def fft(u, shift=True):
     '''
     Convert to spatial frequency domain.
     '''
@@ -89,3 +89,22 @@ def sfft(u, shift=True):
     if shift:
         return np.fft.fftshift(u_f, axes=axes)
     return u_f
+
+
+def power_spectrum(u, n_bins=10):
+    '''
+    Compute spatial power spectral density.
+    '''
+    # compute power spectrum
+    ps = np.abs(fft(u))**2
+    ps.name = u.name
+
+    # compute spatial frequency radii for binning
+    x = ps.field.spatial_points(reshape=False, standardize=True)
+    r = np.linalg.norm(x, ord=2, axis=-1)
+    ps = ps.assign_coords(spatial_frequency=(ps.field.spatial_dims, r))
+
+    # take mean across spatial frequency bins
+    bins = np.linspace(0, 1, n_bins + 1, endpoint=True)
+    ps = ps.groupby_bins('spatial_frequency', bins=bins).mean(...)
+    return ps #.values

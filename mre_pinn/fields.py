@@ -4,20 +4,31 @@ import torch
 import deepxde
 
 
-def nd_coords(coords, center=False):
+def nd_coords(coords, reshape=True, standardize=False):
     '''
     Cartesian product of a set of coordinate arrays.
 
     Args:
         coords: A list of N 1D coordinate arrays.
-        center: If True, center the coordinates.
+        reshape: If True, reshape as a matrix.
+        standardize: If True, standardize to [-1, 1]/.
     Returns:
         An array containing N-dimensional coordinates.
     '''
     coords = np.meshgrid(*coords, indexing='ij')
-    coords = np.stack(coords, axis=-1).reshape(-1, len(coords))
-    if center:
-        coords -= np.mean(coords, axis=0, keepdims=True)
+    coords = np.stack(coords, axis=-1)
+
+    if reshape:
+        coords = coords.reshape(-1, coords.shape[-1])
+
+    if standardize:
+        axes = tuple(range(0, coords.ndim - 1))
+        loc = np.mean(coords, axis=axes, keepdims=True)
+        max_ = np.max(coords, axis=axes, keepdims=True)
+        min_ = np.min(coords, axis=axes, keepdims=True)
+        scale = (max_ - min_) / 2
+        coords = (coords - loc) / scale
+
     return coords
 
 
@@ -58,8 +69,13 @@ class FieldAccessor(object):
     def n_components(self):
         return self.xarray.sizes['component']
 
-    def points(self):
-        return nd_coords((self.xarray.coords[d] for d in self.xarray.field.dims))
+    def points(self, dims=None, *args, **kwargs):
+        dims = dims or self.xarray.field.dims
+        return nd_coords((self.xarray.coords[d] for d in dims), *args, **kwargs)
+
+    def spatial_points(self, *args, **kwargs):
+        dims = self.xarray.field.spatial_dims
+        return self.xarray.field.points(dims, *args, **kwargs)
 
     def values(self):
         if self.xarray.field.has_components: # vector field

@@ -87,7 +87,7 @@ def as_real(a, interleave=True):
     return a
 
 
-def as_xarray(a, like):
+def as_xarray(a, like, suffix=None):
     '''
     Convert an array to an xarray, copying the dims and coords
     of a reference xarray.
@@ -100,15 +100,19 @@ def as_xarray(a, like):
     '''
     if isinstance(a, torch.Tensor):
         a = a.detach().cpu().numpy()
-    return xr.DataArray(a, dims=like.dims, coords=like.coords)
+    if suffix is not None:
+        name = like.name + suffix
+    else:
+        name = like.name
+    return xr.DataArray(a, dims=like.dims, coords=like.coords, name=name)
 
 
-def copy_metadata(func):
+def copy_metadata(func, suffix=None):
     @wraps(func)
     def wrapper(a, *args, **kwargs):
         ret = func(a, *args, **kwargs)
         if isinstance(a, xr.DataArray):
-            return as_xarray(ret, like=a)
+            return as_xarray(ret, like=a, suffix=suffix)
         return ret
     return wrapper
 

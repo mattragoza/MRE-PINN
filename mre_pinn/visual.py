@@ -44,7 +44,7 @@ class XArrayViewer(object):
         '''
         if 'domain' not in xarray.dims:
             xarray = xr.concat(
-                [xarray, discrete.sfft(xarray)],
+                [xarray, discrete.fft(xarray)],
                 dim=xr.DataArray(['space', 'frequency'], dims=['domain'])
             )
 
@@ -190,7 +190,7 @@ class XArrayViewer(object):
                         resolution=x_res,
                         xlabel=x_dim,
                         ylabel=row_label,
-                        title=col_label
+                        title=col_label,
                         **kwargs
                     )
                     if len(lines) > 1:
@@ -525,7 +525,7 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, p
         ])
         return fig, axes, cbar_ax
     else:
-        return fig, axes
+        return fig, axes, None
 
 
 def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
@@ -535,6 +535,8 @@ def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwar
         n_x, = a.shape
     x = np.arange(n_x) * resolution
     lines = ax.plot(x, a)
+    ax.set_yscale(kwargs.get('yscale', 'linear'))
+    ax.set_xscale(kwargs.get('xscale', 'linear'))
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
