@@ -96,36 +96,38 @@ class TestEvaluation(PeriodicCallback):
     def test_eval(self):
 
         # get ground truth values
-        u, mu = self.data.u, self.data.mu
-        x = u.field.points().astype(np.float32)
+        u_true = self.data.u
+        mu_true = self.data.mu
+        Mu_base = self.data.Mu
+        x = self.data.field.points().astype(np.float32)
 
         # get model predictions
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
             self.model.predict(x, batch_size=self.batch_size)
 
         # convert tensors to xarrays
-        u_pred  = as_xarray(u_pred.reshape(u.shape),   like=u)
-        lu_pred = as_xarray(lu_pred.reshape(u.shape),  like=u)
-        f_trac  = as_xarray(f_trac.reshape(u.shape),   like=u)
-        f_body  = as_xarray(f_body.reshape(u.shape),   like=u)
-        mu_pred = as_xarray(mu_pred.reshape(mu.shape), like=mu)
+        u_pred  = as_xarray(u_pred.reshape(u_true.shape), like=u_true)
+        lu_pred = as_xarray(lu_pred.reshape(u_true.shape), like=u_true)
+        f_trac  = as_xarray(f_trac.reshape(u_true.shape), like=u_true)
+        f_body  = as_xarray(f_body.reshape(u_true.shape), like=u_true)
+        mu_pred = as_xarray(mu_pred.reshape(mu_true.shape), like=mu_true)
 
         # compute discrete Laplacian of model wave field
-        Lu = discrete.laplacian(u_pred)
+        Lu_pred = discrete.laplacian(u_pred)
 
         # compute and concatenate model, residual, and reference values
         new_dim = xr.DataArray(
             ['u_pred', 'u_diff', 'u_true'], dims=['variable']
         )
-        u_diff = u - u_pred
-        u  = xr.concat([u_pred, u_diff, u],  dim=new_dim)
+        u_diff = u_true - u_pred
+        u = xr.concat([u_pred, u_diff, u_true],  dim=new_dim)
         u.name = 'wave field'
 
         new_dim = xr.DataArray(
             ['lu_pred', 'lu_diff', 'Lu_pred'], dims=['variable']
         )
-        lu_diff = Lu - lu_pred
-        lu = xr.concat([lu_pred, lu_diff, Lu], dim=new_dim)
+        lu_diff = Lu_pred - lu_pred
+        lu = xr.concat([lu_pred, lu_diff, Lu_pred], dim=new_dim)
         lu.name = 'Laplacian'
 
         new_dim = xr.DataArray(
@@ -138,14 +140,22 @@ class TestEvaluation(PeriodicCallback):
         new_dim = xr.DataArray(
             ['mu_pred', 'mu_diff', 'mu_true'], dims=['variable']
         )
-        mu_diff = mu - mu_pred
-        mu = xr.concat([mu_pred, mu_diff, mu], dim=new_dim)
+        mu_diff = mu_true - mu_pred
+        mu = xr.concat([mu_pred, mu_diff, mu_true], dim=new_dim)
         mu.name = 'elastogram'
+
+        new_dim = xr.DataArray(
+            ['Mu', 'Mu_diff', 'mu_true'], dims=['variable']
+        )
+        Mu_diff = mu_true - Mu_base
+        Mu = xr.concat([Mu_base, Mu_diff, mu_true], dim=new_dim)
+        Mu.name = 'baseline'
 
         # take mean of mu across frequency
         mu = mu.mean('frequency')
+        Mu = Mu.mean('frequency')
 
-        return u, lu, pde, mu
+        return u, lu, pde, mu, Mu
 
     def update_viewers(self, arrays):
         try: # update array values
@@ -189,7 +199,7 @@ class TestEvaluation(PeriodicCallback):
             self.metrics.loc[index, name] = value
 
     def update_plots(self):
-        data = self.metrics
+        data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
             self.freq_plot.update_data(data)
@@ -202,11 +212,11 @@ class TestEvaluation(PeriodicCallback):
                 hue='variable_source'
             )
             self.freq_plot = visual.DataViewer(
-                data,
+                data[data.variable_source == 'residual'],
                 x='iteration',
                 y='power',
                 col='variable_type',
-                row='variable_source',
+                #row='variable_source',
                 hue='spatial_frequency_bin'
             )
 

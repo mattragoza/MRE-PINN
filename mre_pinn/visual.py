@@ -400,6 +400,8 @@ class DataViewer(object):
             self.lgd_ax.yaxis.set_visible(False)
             sns.despine(ax=self.lgd_ax, left=True, right=True, bottom=True, top=True)
 
+        self.fig.canvas.draw()
+
     def update_data(self, data):
         pass
 
