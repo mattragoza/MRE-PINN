@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import xarray as xr
 import torch
 import deepxde
@@ -66,48 +67,36 @@ class PDEResampler(PeriodicCallback):
 
 class TestEvaluation(PeriodicCallback):
 
-    def __init__(self, period, data, batch_size, **kwargs):
+    def __init__(self, period, data, batch_size, plot=True, view=True):
         super().__init__(period)
-        self.data = data
+        self.data = data.copy()
         self.batch_size = batch_size
-        self.viewer_kws = kwargs
-        self.initialized = False
+        self.plot = plot
+        self.view = view
 
-    def initialize(self, u, lu, pde, mu, pct=95):
-
-        u_map = visual.wave_color_map()
-        u_max = np.percentile(np.abs(u), pct) * 1.1
-        self.u_kws = dict(cmap=u_map, vmax=u_max)
-        self.u_kws.update(self.viewer_kws)
-        self.u_viewer = visual.XArrayViewer(u, **self.u_kws)
-
-        lu_max = np.percentile(np.abs(lu), pct) * 1.1
-        self.lu_kws = dict(cmap=u_map, vmax=lu_max)
-        self.lu_kws.update(self.viewer_kws)
-        self.lu_viewer = visual.XArrayViewer(lu, **self.lu_kws)
-
-        pde_max = np.percentile(np.abs(pde), pct) * 1.1
-        self.pde_kws = dict(cmap=u_map, vmax=pde_max)
-        self.pde_kws.update(self.viewer_kws)
-        self.pde_viewer = visual.XArrayViewer(pde, **self.pde_kws)
-
-        mu_map = visual.elast_color_map(symmetric=True)
-        mu_max = np.percentile(np.abs(mu), pct) * 6
-        self.mu_kws = dict(cmap=mu_map, vmax=mu_max)
-        self.mu_kws.update(self.viewer_kws)
-        self.mu_viewer = visual.XArrayViewer(mu, **self.mu_kws)
-        self.initialized = True
-
-    def update_viewers(self, u, lu, pde, mu):
-        self.u_viewer.update_array(u)
-        self.lu_viewer.update_array(lu)
-        self.pde_viewer.update_array(pde)
-        self.mu_viewer.update_array(mu)
+        index_cols = [
+            'iteration',
+            'variable_type',
+            'variable_source',
+            'variable_name',
+            'spatial_frequency_bin'
+        ]
+        self.metrics = pd.DataFrame(columns=index_cols)
+        self.metrics.set_index(index_cols, inplace=True)
 
     def on_period_begin(self):
+        arrays = self.test_eval()
+        metrics = self.compute_metrics(arrays)
+        self.update_metrics(metrics)
+        if self.plot:
+            self.update_plots()
+        if self.view:
+            self.update_viewers(arrays)
+
+    def test_eval(self):
 
         # get ground truth values
-        u, mu, Lu = self.data.u, self.data.mu, self.data.Lu
+        u, mu = self.data.u, self.data.mu
         x = u.field.points().astype(np.float32)
 
         # get model predictions
@@ -124,26 +113,102 @@ class TestEvaluation(PeriodicCallback):
         # compute discrete Laplacian of model wave field
         Lu = discrete.laplacian(u_pred)
 
-        # compute and concatenate residuals wrt reference values
-        new_dim = xr.DataArray(['u_pred', 'residual', 'u_true'], dims=['residual'])
-        u  = xr.concat([u_pred,  u  - u_pred,  u],  dim=new_dim)
+        # compute and concatenate model, residual, and reference values
+        new_dim = xr.DataArray(
+            ['u_pred', 'u_diff', 'u_true'], dims=['variable']
+        )
+        u_diff = u - u_pred
+        u  = xr.concat([u_pred, u_diff, u],  dim=new_dim)
+        u.name = 'wave field'
 
-        new_dim = xr.DataArray(['lu_pred', 'residual', 'Lu_pred'], dims=['residual'])
-        lu = xr.concat([lu_pred, Lu - lu_pred, Lu], dim=new_dim)
+        new_dim = xr.DataArray(
+            ['lu_pred', 'lu_diff', 'Lu_pred'], dims=['variable']
+        )
+        lu_diff = Lu - lu_pred
+        lu = xr.concat([lu_pred, lu_diff, Lu], dim=new_dim)
+        lu.name = 'Laplacian'
 
-        new_dim = xr.DataArray(['f_trac', 'residual', 'f_body'], dims=['residual'])
-        pde = xr.concat([f_trac, f_trac + f_body, f_body], dim=new_dim)
+        new_dim = xr.DataArray(
+            ['f_trac', 'f_sum', 'f_body'], dims=['variable']
+        )
+        f_sum = f_trac + f_body
+        pde = xr.concat([f_trac, f_sum, f_body], dim=new_dim)
+        pde.name = 'PDE'
 
-        new_dim = xr.DataArray(['mu_pred', 'residual', 'mu_true'], dims=['residual'])
-        mu = xr.concat([mu_pred, mu - mu_pred, mu], dim=new_dim)
+        new_dim = xr.DataArray(
+            ['mu_pred', 'mu_diff', 'mu_true'], dims=['variable']
+        )
+        mu_diff = mu - mu_pred
+        mu = xr.concat([mu_pred, mu_diff, mu], dim=new_dim)
+        mu.name = 'elastogram'
 
         # take mean of mu across frequency
         mu = mu.mean('frequency')
 
-        if not self.initialized:
-            self.initialize(u, lu, pde, mu)
-        else:
-            self.update_viewers(u, lu, pde, mu)
+        return u, lu, pde, mu
+
+    def update_viewers(self, arrays):
+        try: # update array values
+            for i, array in enumerate(arrays):
+                self.viewers[i].update_array(array)
+        except AttributeError: # initialize viewers
+            self.viewers = []
+            for i, array in enumerate(arrays):
+                kwargs = visual.get_color_kws(array)
+                viewer = visual.XArrayViewer(
+                    array, row='domain', col='variable', dpi=25, **kwargs
+                )
+                self.viewers.append(viewer)
+
+    def compute_metrics(self, arrays):
+        
+        # current training iteration
+        iter_ = self.model.train_state.step
+        sources = ['model', 'residual', 'reference']
+
+        metrics = []
+        for array in arrays:
+            var_type = array.name
+
+            for var_src, var_name in zip(sources, array['variable'].values):
+                a = array.sel(variable=var_name)
+                index = (iter_, var_type, var_src, var_name, 'all')
+                metric = (index, 'norm', np.linalg.norm(a))
+                metrics.append(metric)
+
+                ps = discrete.power_spectrum(a)
+                for f_bin, power in zip(ps.spatial_frequency_bins.values, ps.values):
+                    index = (iter_, var_type, var_src, var_name, f_bin.right)
+                    metric = (index, 'power', power)
+                    metrics.append(metric)
+
+        return metrics
+
+    def update_metrics(self, new_metrics):
+        for index, name, value in new_metrics:
+            self.metrics.loc[index, name] = value
+
+    def update_plots(self):
+        data = self.metrics
+        try:
+            self.norm_plot.update_data(data)
+            self.freq_plot.update_data(data)
+        except AttributeError:
+            self.norm_plot = visual.DataViewer(
+                data,
+                x='iteration',
+                y='norm',
+                col='variable_type',
+                hue='variable_source'
+            )
+            self.freq_plot = visual.DataViewer(
+                data,
+                x='iteration',
+                y='power',
+                col='variable_type',
+                row='variable_source',
+                hue='spatial_frequency_bin'
+            )
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):

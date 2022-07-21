@@ -1,11 +1,13 @@
-import matplotlib as mpl
 import numpy as np
+import xarray as xr
+import deepxde
+
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import matplotlib.widgets
 import mpl_toolkits.axes_grid1
-import xarray as xr
-import deepxde
+import seaborn as sns
 import ipywidgets
 
 from .utils import exists, print_if, as_iterable
@@ -123,8 +125,8 @@ class XArrayViewer(object):
     ):
         # determine number of axes
         n_rows, n_cols = (1, 1)
-        row_dim = self.value_dim_map.get('row', None)
-        col_dim = self.value_dim_map.get('col', None)
+        row_dim = self.value_dim_map.get('row')
+        col_dim = self.value_dim_map.get('col')
         if row_dim is not None:
             n_rows = len(self.coords[row_dim])
         if col_dim is not None:
@@ -255,73 +257,151 @@ class XArrayViewer(object):
         self.fig.canvas.draw()
 
 
-class TrainingPlot(deepxde.display.TrainingDisplay):
+class DataViewer(object):
+    '''
+    XArrayViewer but for a pd.DataFrame.
+    '''
+    def __init__(
+        self, data, x, y, hue=None, row=None, col=None, **kwargs
+    ):
+        data = data.reset_index()
+        self.establish_variables(x, y, hue, row, col)
+        self.set_data_internals(data)
+        self.initialize_subplots(**kwargs)
 
-    def __init__(self, losses, metrics):
-        self.losses = losses
-        self.metrics = metrics
-        self.initialized = False
+    def establish_variables(self, x, y, hue, row, col):
+        variable_map = {'x': x, 'y': y}
+        index_vars = []
+ 
+        if exists(row):
+            variable_map['row'] = row
+            index_vars.append(row)
 
-    def initialize(self):
+        if exists(col):
+            variable_map['col'] = col
+            index_vars.append(col)
 
-        self.fig, self.axes = subplot_grid(
-            n_rows=1,
-            n_cols=2,
-            ax_height=3,
-            ax_width=3,
-            space=[0.3, 0.3],
-            pad=[1.2, 0.4, 0.7, 0.4]
+        if exists(hue):
+            variable_map['hue'] = hue
+            index_vars.append(hue)
+
+        self.variable_map = variable_map
+        self.index_vars = index_vars
+
+    def set_data_internals(self, data):
+
+        # set internal data frame and index levels
+        if self.index_vars:
+            levels = {
+                v: data[v].unique() for v in self.index_vars
+            }
+            data = data.set_index(self.index_vars)
+        else:
+            levels = {}
+
+        self.data = data.sort_index()
+        self.levels = levels
+
+    def get_index_and_labels(self, i, j):
+        '''
+        Return the data index and axes labels
+        associated with a given row and column.
+        '''
+        index = ()
+        row_label = col_label = ''
+        row_var = self.variable_map.get('row')
+        col_var = self.variable_map.get('col')
+        if exists(row_var):
+            row_level = self.levels[row_var][i]
+            index += (row_level,)
+            row_label = str(row_level) + ' '
+        if exists(col_var):
+            col_level = self.levels[col_var][j]
+            index += (col_level,)
+            if i == 0: # first row
+                col_label = str(col_level)
+        return index, row_label, col_label
+
+    def initialize_subplots(self, ax_height=2, ax_width=1.5, lgd_width=0.75, **kwargs):
+
+        n_rows, n_cols = (1, 1)
+        row_var = self.variable_map.get('row')
+        col_var = self.variable_map.get('col')
+        if row_var is not None:
+            n_rows = len(self.levels[row_var])
+        if col_var is not None:
+            n_cols = len(self.levels[col_var])
+        n_axes = n_rows * n_cols
+
+        self.n_rows = n_rows
+        self.n_cols = n_cols
+
+        # determine plot type
+        x_var = self.variable_map.get('x')
+        y_var = self.variable_map.get('y')
+        hue_var = self.variable_map.get('hue')
+        ylabel_var = self.variable_map.get('ylabel')
+
+        # create subplot grid
+        self.fig, self.axes, self.lgd_ax = subplot_grid(
+            n_rows=n_rows,
+            n_cols=n_cols,
+            ax_height=ax_height,
+            ax_width=ax_width,
+            cbar_width=lgd_width * bool(hue_var),
+            space=[0.30, 0.50],
+            pad=[1.00, 0.45, 0.65, 0.45]
         )
 
-        # training loss and metric plots
-        self.loss_lines = []
-        for loss in self.losses:
-            line, = self.axes[0,0].plot([], [], label=loss)
-            self.loss_lines.append(line)
+        # plot the data and store the artists
+        artists = {}
+        for i in range(n_rows):
+            for j in range(n_cols):
 
-        self.metric_lines = []
-        for metric in self.metrics:
-            line, = self.axes[0,1].plot([], [], label=metric)
-            self.metric_lines.append(line)
+                index, row_label, col_label = self.get_index_and_labels(i, j)
+                columns = [x_var, y_var]
+                data = self.data.loc[index][columns].dropna().reset_index()
 
-        self.axes[0,0].set_ylabel('loss')
-        self.axes[0,1].set_ylabel('metric')
+                ax = self.axes[i,j]
+                ax.set_title(col_label)
+                ax.grid(linestyle=':')
 
-        for ax in self.axes.flatten():
-            ax.set_xlabel('iteration')
-            ax.set_yscale('log')
-            #ax.grid(linestyle=':')
+                sns.lineplot(
+                    data=data,
+                    x=x_var,
+                    y=y_var,
+                    hue=hue_var,
+                    hue_order=self.levels.get(hue_var),
+                    ax=ax,
+                    **kwargs
+                )
+                ax.set_yscale('log')
 
-        if self.loss_lines:
-            self.axes[0,0].legend(frameon=True, edgecolor='0.2')
+                if ax.legend_:
+                    ax.legend_.remove()
 
-        if self.metric_lines:
-            self.axes[0,1].legend(frameon=True, edgecolor='0.2')
+                if j == 0: # first column
+                    ax.set_ylabel(row_label + y_var)
+                else:
+                    ax.set_ylabel(None)
+                if i + 1 >= len(self.levels.get(row_var, [])): # last row
+                    ax.set_xlabel(x_var)
+                else:
+                    ax.set_xlabel(None)
 
-        self.initialized = True
+        sns.despine(self.fig)
 
-    def __call__(self, train_state):
+        if hue_var: # create legend on extra axes
+            self.lgd_ax.legend(
+                *ax.get_legend_handles_labels(),
+                loc='upper left', bbox_to_anchor=[-0.5,1], frameon=False
+            )
+            self.lgd_ax.xaxis.set_visible(False)
+            self.lgd_ax.yaxis.set_visible(False)
+            sns.despine(ax=self.lgd_ax, left=True, right=True, bottom=True, top=True)
 
-        if not self.initialized:
-            self.initialize()
-        
-        for i, line in enumerate(self.loss_lines):
-            new_x = train_state.step
-            new_y = train_state.loss_test[i]
-            line.set_xdata(np.append(line.get_xdata(), new_x))
-            line.set_ydata(np.append(line.get_ydata(), new_y))
-
-        for i, line in enumerate(self.metric_lines):
-            new_x = train_state.step
-            new_y = train_state.metrics_test[i]
-            line.set_xdata(np.append(line.get_xdata(), new_x))
-            line.set_ydata(np.append(line.get_ydata(), new_y))
-        
-        for ax in self.axes.flatten():
-            ax.relim()
-            ax.autoscale_view()
-
-        self.fig.canvas.draw()
+    def update_data(self, data):
+        pass
 
 
 class Player(FuncAnimation):
@@ -409,7 +489,7 @@ class Player(FuncAnimation):
         self.slider.set_val(i)
 
 
-def wave_color_map(n_colors=255):
+def wave_color_map(n_colors=255, reverse=False):
     '''
     Create a colormap for MRE wave images
     from yellow, red, black, blue, to cyan.
@@ -421,6 +501,9 @@ def wave_color_map(n_colors=255):
     yellow = (1, 1, 0)
 
     colors = [cyan, blue, black, red, yellow]
+
+    if reverse:
+        colors = colors[::-1]
 
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='wave', colors=colors, N=n_colors
@@ -453,8 +536,27 @@ def elast_color_map(n_colors=255, symmetric=False):
     )
 
 
-class Colorbar(matplotlib.colorbar.Colorbar):
+def get_color_kws(array):
+    '''
+    Get a dictionary of colormap arguments
+    for visualizing the provided xarray.
+    '''
+    if array.name in {'mu', 'elast', 'elastogram'}:
+        cmap = wave_color_map(reverse=True)
+        vmax = np.max(np.abs(array))
+    else:
+        cmap = wave_color_map()
+        vmax = np.percentile(np.abs(array), 95) * 1.1
+    return dict(cmap=cmap, vmax=vmax)
 
+
+class Colorbar(matplotlib.colorbar.Colorbar):
+    '''
+    A colorbar in which the zero position is fixed
+    during an interactive drag_pan operation. This
+    makes operations like increasing/decreasing the
+    "luminance" of the image more intuitive.
+    '''
     def drag_pan(self, button, key, x, y):
         points = self.ax._get_pan_points(button, key, x, y)
 
@@ -476,12 +578,19 @@ class Colorbar(matplotlib.colorbar.Colorbar):
 
 def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, pad=0):
     '''
+    A replacement for the plt.subplots function that enables
+    more precise control over the figure size and layout.
+
+    Instead of providing the figure size and having all other
+    aspects determined relative to that, you provide the axes
+    sizes and layout spacing, and the figure size is computed.
+
     Args:
-        n_rows
-        n_cols
-        ax_height
-        ax_width
-        cbar_width
+        n_rows: int
+        n_cols: int
+        ax_height: float or iterable of floats
+        ax_width: float or iterable of floats
+        cbar_width: optional float
         space: (vertical, horizontal)
         pad: (left, right, bottom, top)
     Returns:
@@ -528,7 +637,7 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, p
         return fig, axes, None
 
 
-def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
+def plot_line_1d(ax, a, resolution, **kwargs):
     if a.ndim == 2:
         n_x, n_hue = a.shape
     else:
@@ -537,9 +646,9 @@ def plot_line_1d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwar
     lines = ax.plot(x, a)
     ax.set_yscale(kwargs.get('yscale', 'linear'))
     ax.set_xscale(kwargs.get('xscale', 'linear'))
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    ax.set_xlabel(kwargs.get('xlabel'))
+    ax.set_ylabel(kwargs.get('ylabel'))
+    ax.set_title(kwargs.get('title'))
     ax.set_ylim(kwargs.get('vmin', None), kwargs.get('vmax', None))
     return lines
 
