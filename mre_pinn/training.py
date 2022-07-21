@@ -4,7 +4,7 @@ import xarray as xr
 import torch
 import deepxde
 
-from .utils import as_xarray, as_matrix, minibatch, timer
+from .utils import as_xarray, as_matrix, minibatch
 from . import pde, discrete, visual
 
 
@@ -67,7 +67,9 @@ class PDEResampler(PeriodicCallback):
 
 class TestEvaluation(PeriodicCallback):
 
-    def __init__(self, period, data, batch_size, plot=True, view=True):
+    def __init__(
+        self, period, data, batch_size, plot=True, view=True, out_prefix=None
+    ):
         super().__init__(period)
         self.data = data.copy()
         self.batch_size = batch_size
@@ -83,6 +85,7 @@ class TestEvaluation(PeriodicCallback):
         ]
         self.metrics = pd.DataFrame(columns=index_cols)
         self.metrics.set_index(index_cols, inplace=True)
+        self.out_prefix = out_prefix
 
     def on_period_begin(self):
         arrays = self.test_eval()
@@ -157,19 +160,6 @@ class TestEvaluation(PeriodicCallback):
 
         return u, lu, pde, mu, Mu
 
-    def update_viewers(self, arrays):
-        try: # update array values
-            for i, array in enumerate(arrays):
-                self.viewers[i].update_array(array)
-        except AttributeError: # initialize viewers
-            self.viewers = []
-            for i, array in enumerate(arrays):
-                kwargs = visual.get_color_kws(array)
-                viewer = visual.XArrayViewer(
-                    array, row='domain', col='variable', dpi=25, **kwargs
-                )
-                self.viewers.append(viewer)
-
     def compute_metrics(self, arrays):
         
         # current training iteration
@@ -197,6 +187,9 @@ class TestEvaluation(PeriodicCallback):
     def update_metrics(self, new_metrics):
         for index, name, value in new_metrics:
             self.metrics.loc[index, name] = value
+        if self.out_prefix:
+            csv_file = self.out_prefix + '_train_metrics.csv'
+            self.metrics.to_csv(csv_file, sep=' ')
 
     def update_plots(self):
         data = self.metrics.reset_index()
@@ -220,6 +213,29 @@ class TestEvaluation(PeriodicCallback):
                 hue='spatial_frequency_bin',
                 palette='Blues_r',
             )
+        if self.out_prefix:
+            png_file = self.out_prefix + '_train_norms.png'
+            self.freq_plot.to_png(png_file)
+            png_file = self.out_prefix + '_train_freqs.png'
+            self.norm_plot.to_png(png_file)
+
+    def update_viewers(self, arrays):
+        try: # update array values
+            for i, array in enumerate(arrays):
+                self.viewers[i].update_array(array)
+        except AttributeError: # initialize viewers
+            self.viewers = []
+            for i, array in enumerate(arrays):
+                kwargs = visual.get_color_kws(array)
+                viewer = visual.XArrayViewer(
+                    array, row='domain', col='variable', dpi=25, **kwargs
+                )
+                self.viewers.append(viewer)
+        if self.out_prefix:
+            for array, viewer in zip(arrays, self.viewers):
+                array_name = array.name.lower().replace(' ', '_')
+                png_file = f'{self.out_prefix}_{array_name}.png'
+                viewer.to_png(png_file)
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):

@@ -16,7 +16,14 @@ from . import discrete
 DPI = 50
 
 
-class XArrayViewer(object):
+class Viewer(object):
+
+    def to_png(self, png_file):
+        self.fig.savefig(png_file, bbox_inches='tight')
+
+
+
+class XArrayViewer(Viewer):
 
     def __init__(
         self,
@@ -270,7 +277,7 @@ def my_line_plot(data, x, y, hue, hue_order, colors, ax, **kwargs):
     return lines
 
 
-class DataViewer(object):
+class DataViewer(Viewer):
     '''
     XArrayViewer but for a pd.DataFrame.
     '''
