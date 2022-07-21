@@ -257,6 +257,19 @@ class XArrayViewer(object):
         self.fig.canvas.draw()
 
 
+def my_line_plot(data, x, y, hue, hue_order, colors, ax, **kwargs):
+    lines = []
+    data = data.set_index(hue).sort_values(x)
+    for hue_level, color in zip(hue_order, colors):
+        if hue_level not in data.index:
+            lines.append(None)
+            continue
+        hue_data = data.loc[hue_level]
+        line, = ax.plot(hue_data[x], hue_data[y], color=color, label=hue_level)
+        lines.append(line)
+    return lines
+
+
 class DataViewer(object):
     '''
     XArrayViewer but for a pd.DataFrame.
@@ -322,8 +335,9 @@ class DataViewer(object):
                 col_label = str(col_level)
         return index, row_label, col_label
 
-    def initialize_subplots(self, ax_height=2, ax_width=1.5, lgd_width=0.75, **kwargs):
-
+    def initialize_subplots(
+        self, ax_height=2, ax_width=1.5, lgd_width=0.75, palette=None, **kwargs
+    ):
         n_rows, n_cols = (1, 1)
         row_var = self.variable_map.get('row')
         col_var = self.variable_map.get('col')
@@ -340,7 +354,9 @@ class DataViewer(object):
         x_var = self.variable_map.get('x')
         y_var = self.variable_map.get('y')
         hue_var = self.variable_map.get('hue')
-        ylabel_var = self.variable_map.get('ylabel')
+        hue_order = self.levels.get(hue_var)
+        n_hues = len(hue_order) if hue_var else None
+        colors = sns.color_palette(palette, n_hues)
 
         # create subplot grid
         self.fig, self.axes, self.lgd_ax = subplot_grid(
@@ -354,7 +370,7 @@ class DataViewer(object):
         )
 
         # plot the data and store the artists
-        artists = {}
+        self.artists = {}
         for i in range(n_rows):
             for j in range(n_cols):
 
@@ -366,16 +382,20 @@ class DataViewer(object):
                 ax.set_title(col_label)
                 ax.grid(linestyle=':')
 
-                sns.lineplot(
+                lines = my_line_plot(
                     data=data,
                     x=x_var,
                     y=y_var,
                     hue=hue_var,
-                    hue_order=self.levels.get(hue_var),
+                    hue_order=hue_order,
+                    colors=colors,
                     ax=ax,
                     **kwargs
                 )
                 ax.set_yscale('log')
+
+                for hue_level, line in zip(hue_order, lines):
+                    self.artists[index + (hue_level,)] = line
 
                 if ax.legend_:
                     ax.legend_.remove()
@@ -403,7 +423,34 @@ class DataViewer(object):
         self.fig.canvas.draw()
 
     def update_data(self, data):
-        pass
+        data = data.reset_index()
+        data = data.set_index(self.index_vars)
+        data = data.sort_index()
+        self.data = data
+        self.update_artists()
+
+    def update_artists(self):
+        x_var = self.variable_map.get('x')
+        y_var = self.variable_map.get('y')
+        hue_var = self.variable_map.get('hue')
+        hue_order = self.levels.get(hue_var)
+        for i in range(self.n_rows):
+            for j in range(self.n_cols):
+                index, row_label, col_label = self.get_index_and_labels(i, j)
+                columns = [x_var, y_var]
+                data = self.data.loc[index][columns].dropna()
+                for hue_level in hue_order:
+                    if hue_level not in data.index:
+                        continue
+                    artist = self.artists[index + (hue_level,)]
+                    hue_data = data.loc[hue_level]
+                    artist.set_xdata(hue_data[x_var].values)
+                    artist.set_ydata(hue_data[y_var].values)
+                self.axes[i,j].relim()
+                self.axes[i,j].autoscale_view()
+
+        self.fig.canvas.draw()
+
 
 
 class Player(FuncAnimation):
@@ -543,7 +590,7 @@ def get_color_kws(array):
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.
     '''
-    if array.name in {'mu', 'elast', 'elastogram'}:
+    if array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline'}:
         cmap = wave_color_map(reverse=True)
         vmax = np.max(np.abs(array))
     else:

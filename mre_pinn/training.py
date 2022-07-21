@@ -4,7 +4,7 @@ import xarray as xr
 import torch
 import deepxde
 
-from .utils import as_xarray, as_matrix, minibatch
+from .utils import as_xarray, as_matrix, minibatch, timer
 from . import pde, discrete, visual
 
 
@@ -202,7 +202,7 @@ class TestEvaluation(PeriodicCallback):
         data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
-            self.freq_plot.update_data(data)
+            self.freq_plot.update_data(data[data.variable_source == 'residual'])
         except AttributeError:
             self.norm_plot = visual.DataViewer(
                 data,
@@ -217,7 +217,8 @@ class TestEvaluation(PeriodicCallback):
                 y='power',
                 col='variable_type',
                 #row='variable_source',
-                hue='spatial_frequency_bin'
+                hue='spatial_frequency_bin',
+                palette='Blues_r',
             )
 
 
