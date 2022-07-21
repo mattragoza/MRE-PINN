@@ -17,18 +17,23 @@ def print_if(verbose, *args, **kwargs):
         print(*args, **kwargs)
 
 
+def is_iterable(obj, string_ok=False):
+    if isinstance(obj, str):
+        return string_ok
+    return hasattr(obj, '__iter__')
+
+
+def as_iterable(obj, length=1, string_ok=False):
+    if not is_iterable(obj, string_ok):
+        return [obj] * length
+    return obj
+
+
 def parse_iterable(obj, sep='-', type=None):
     if isinstance(obj, str):
         obj = obj.split(sep)
     if type is not None:
         return [type(x) for x in obj]
-    return obj
-
-
-def as_iterable(obj, length=1, string=False):
-    iterable = (list, tuple, str) if string else (list, tuple)
-    if not isinstance(obj, iterable):
-        return [obj] * length
     return obj
 
 

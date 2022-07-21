@@ -117,7 +117,7 @@ class FFNN(torch.nn.ModuleList):
     ):
         super().__init__()
 
-        activ_fn = [get_activ_fn(a) for a in as_iterable(activ_fn, string=True)]
+        activ_fn = [get_activ_fn(a) for a in as_iterable(activ_fn, string_ok=True)]
         n_activ_fns = len(activ_fn)
 
         self.linears = []
