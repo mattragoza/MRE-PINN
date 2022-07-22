@@ -419,10 +419,14 @@ class DataViewer(Viewer):
         sns.despine(self.fig)
 
         if hue_var: # create legend on extra axes
-            self.lgd_ax.legend(
+            lgd = self.lgd_ax.legend(
                 *ax.get_legend_handles_labels(),
-                loc='upper left', bbox_to_anchor=[-0.5,1], frameon=False
+                title=hue_var,
+                loc='upper left',
+                bbox_to_anchor=[-0.5,1.15],
+                frameon=False
             )
+            lgd._legend_box.align = 'left'
             self.lgd_ax.xaxis.set_visible(False)
             self.lgd_ax.yaxis.set_visible(False)
             sns.despine(ax=self.lgd_ax, left=True, right=True, bottom=True, top=True)
