@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -68,9 +69,17 @@ class PDEResampler(PeriodicCallback):
 class TestEvaluation(PeriodicCallback):
 
     def __init__(
-        self, period, data, batch_size, plot=True, view=True, out_prefix=None
+        self,
+        data,
+        batch_size,
+        test_every=1000,
+        save_every=10000,
+        save_prefix=None,
+        plot=True,
+        view=True,
     ):
-        super().__init__(period)
+        assert save_every % test_every == 0
+        super().__init__(period=test_every)
         self.data = data.copy()
         self.batch_size = batch_size
         self.plot = plot
@@ -85,26 +94,43 @@ class TestEvaluation(PeriodicCallback):
         ]
         self.metrics = pd.DataFrame(columns=index_cols)
         self.metrics.set_index(index_cols, inplace=True)
-        self.out_prefix = out_prefix
+        self.save_prefix = save_prefix
+        self.save_every = save_every
+
+        # estimate % of time spent testing
+        self.t_start = time.time()
+        self.test_time = 0
 
     def on_period_begin(self):
-        arrays = self.test_evaluate()
-        metrics = self.compute_metrics(arrays)
-        self.update_arrays(arrays)
-        self.update_metrics(metrics)
-        if self.plot:
-            self.update_plots()
-        if self.view:
-            self.update_viewers()
-        self.model.save(self.out_prefix + '_model')
+        t_start = time.time()
+        save = (self.model.train_state.step % self.save_every == 0)
+        self.test_evaluate(self.data, save)
+        self.test_time += (time.time() - t_start)
 
-    def test_evaluate(self):
+    def on_period_end(self):
+        total_time = time.time() - self.t_start
+        pct_test_time = self.test_time / total_time * 100
+        print(f'Time spent testing: {pct_test_time:.2f}%')
+
+    def test_evaluate(self, data, save=True):    
+        arrays = self.compute_arrays(self.data)
+        metrics = self.compute_metrics(arrays)
+        self.update_arrays(arrays, save)
+        self.update_metrics(metrics, save)
+        if self.plot:
+            self.update_plots(save)
+        if self.view:
+            self.update_viewers(save)
+        if save: # save model state
+            self.model.save(self.save_prefix + '_model')
+
+    def compute_arrays(self, data):
 
         # get ground truth values
-        u_true = self.data.u
-        mu_true = self.data.mu
-        Mu_base = self.data.Mu
-        x = self.data.field.points().astype(np.float32)
+        u_true = data.u
+        mu_true = data.mu
+        Mu_base = data.Mu
+        x = data.field.points().astype(np.float32)
 
         # get model predictions
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
@@ -186,21 +212,21 @@ class TestEvaluation(PeriodicCallback):
 
         return metrics
 
-    def update_arrays(self, arrays):
+    def update_arrays(self, arrays, save=True):
         self.arrays = arrays
-        if self.out_prefix:
+        if self.save_prefix and save:
             for array in arrays:
                 array_name = array.name.lower().replace(' ', '_')
                 array = xr.concat([array.real, array.imag], dim='part')
-                array.to_netcdf(f'{self.out_prefix}_{array_name}.nc')
+                array.to_netcdf(f'{self.save_prefix}_{array_name}.nc')
 
-    def update_metrics(self, new_metrics):
+    def update_metrics(self, new_metrics, save=True):
         for index, name, value in new_metrics:
             self.metrics.loc[index, name] = value
-        if self.out_prefix:
-            self.metrics.to_csv(self.out_prefix + '_train_metrics.csv', sep=' ')
+        if self.save_prefix and save:
+            self.metrics.to_csv(self.save_prefix + '_train_metrics.csv', sep=' ')
 
-    def update_plots(self):
+    def update_plots(self, save=True):
         data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
@@ -222,11 +248,11 @@ class TestEvaluation(PeriodicCallback):
                 hue='spatial_frequency_bin',
                 palette='Blues_r',
             )
-        if self.out_prefix:
-            self.norm_plot.to_png(self.out_prefix + '_train_norms.png') 
-            self.freq_plot.to_png(self.out_prefix + '_train_freqs.png')
+        if self.save_prefix and save:
+            self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
+            self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
 
-    def update_viewers(self):
+    def update_viewers(self, save=True):
         arrays = self.arrays
         try: # update array values
             for i, array in enumerate(arrays):
@@ -239,10 +265,10 @@ class TestEvaluation(PeriodicCallback):
                     array, row='domain', col='variable', dpi=25, **kwargs
                 )
                 self.viewers.append(viewer)
-        if self.out_prefix:
+        if self.save_prefix and save:
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
-                viewer.to_png(f'{self.out_prefix}_{array_name}.png')
+                viewer.to_png(f'{self.save_prefix}_{array_name}.png')
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):
