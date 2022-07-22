@@ -88,15 +88,17 @@ class TestEvaluation(PeriodicCallback):
         self.out_prefix = out_prefix
 
     def on_period_begin(self):
-        arrays = self.test_eval()
+        arrays = self.test_evaluate()
         metrics = self.compute_metrics(arrays)
+        self.update_arrays(arrays)
         self.update_metrics(metrics)
         if self.plot:
             self.update_plots()
         if self.view:
-            self.update_viewers(arrays)
+            self.update_viewers()
+        self.model.save(self.out_prefix + '_model')
 
-    def test_eval(self):
+    def test_evaluate(self):
 
         # get ground truth values
         u_true = self.data.u
@@ -184,12 +186,19 @@ class TestEvaluation(PeriodicCallback):
 
         return metrics
 
+    def update_arrays(self, arrays):
+        self.arrays = arrays
+        if self.out_prefix:
+            for array in arrays:
+                array_name = array.name.lower().replace(' ', '_')
+                array = xr.concat([array.real, array.imag], dim='part')
+                array.to_netcdf(f'{self.out_prefix}_{array_name}.nc')
+
     def update_metrics(self, new_metrics):
         for index, name, value in new_metrics:
             self.metrics.loc[index, name] = value
         if self.out_prefix:
-            csv_file = self.out_prefix + '_train_metrics.csv'
-            self.metrics.to_csv(csv_file, sep=' ')
+            self.metrics.to_csv(self.out_prefix + '_train_metrics.csv', sep=' ')
 
     def update_plots(self):
         data = self.metrics.reset_index()
@@ -214,12 +223,11 @@ class TestEvaluation(PeriodicCallback):
                 palette='Blues_r',
             )
         if self.out_prefix:
-            png_file = self.out_prefix + '_train_norms.png'
-            self.freq_plot.to_png(png_file)
-            png_file = self.out_prefix + '_train_freqs.png'
-            self.norm_plot.to_png(png_file)
+            self.norm_plot.to_png(self.out_prefix + '_train_norms.png') 
+            self.freq_plot.to_png(self.out_prefix + '_train_freqs.png')
 
-    def update_viewers(self, arrays):
+    def update_viewers(self):
+        arrays = self.arrays
         try: # update array values
             for i, array in enumerate(arrays):
                 self.viewers[i].update_array(array)
@@ -234,8 +242,7 @@ class TestEvaluation(PeriodicCallback):
         if self.out_prefix:
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
-                png_file = f'{self.out_prefix}_{array_name}.png'
-                viewer.to_png(png_file)
+                viewer.to_png(f'{self.out_prefix}_{array_name}.png')
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):
