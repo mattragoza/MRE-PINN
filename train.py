@@ -30,9 +30,14 @@ def train(
     pde_loss_wt=1e-7,
     data_loss_wt=1,
     optimizer='adam',
-    batch_size=200,
-    n_domain=200,
-    n_iters=20000
+    batch_size=128,
+    n_domain=128,
+    n_iters=100000,
+
+    # testing settings
+    test_every=1000,
+    save_every=10000,
+    save_prefix=None
 ):
     data, test_data = mre_pinn.data.load_bioqic_dataset(
         data_root=data_root,
@@ -46,12 +51,8 @@ def train(
     u  = data.u.field.values().astype(np.complex64)
     mu = data.mu.field.values().astype(np.complex64)
 
-    print('x ', type(x), x.shape, x.dtype)
-    print('u ', type(u), u.shape, u.dtype)
-    print('mu', type(mu), mu.shape, mu.dtype)
-
     # initialize the PDE, geometry, and boundary conditions
-    pde = mre_pinn.pde.WaveEquation.from_name(pde_name)
+    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
     geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
     bc = mre_pinn.fields.VectorFieldBC(points=x, values=u)
 
@@ -70,23 +71,34 @@ def train(
     print(net)
 
     # compile model and configure training settings
-    model = mre_pinn.training.MREPINNModel(net, pde, geom, bc, batch_size)
+    model = mre_pinn.training.MREPINNModel(
+        net, pde, geom, bc,
+        batch_size=batch_size,
+        num_domain=batch_size,
+        num_boundary=0,
+        train_distribution='pseudo',
+        anchors=None
+    )
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
         loss_weights=[pde_loss_wt, data_loss_wt],
         loss=mre_pinn.training.normalized_l2_loss_fn(u)
     )
-    #deepxde.display.training_display = mre_pinn.visual.TrainingPlot(
-    #    losses=['pde_loss', 'data_loss'], metrics=[]
-    #)
-    callbacks = [
-        mre_pinn.training.TestEvaluation(100, test_data, batch_size, col='frequency'),
-        mre_pinn.training.PDEResampler(period=1),
-    ]
+    test_eval = mre_pinn.training.TestEvaluation(
+        data=test_data,
+        batch_size=batch_size,
+        test_every=test_every,
+        save_every=save_every,
+        save_prefix=save_prefix
+    )
+    sampler = mre_pinn.training.PDEResampler(period=1)
 
     # train the model
-    model.train(n_iters, display_every=10, callbacks=callbacks)
+    model.train(n_iters, display_every=10, callbacks=[test_eval, sampler])
+
+    # final test evaluation
+    test_eval.test_evaluate(data)
 
 
 if __name__ == '__main__':

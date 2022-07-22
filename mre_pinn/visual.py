@@ -128,7 +128,7 @@ class XArrayViewer(Viewer):
         return index, row_label, col_label
 
     def initialize_subplots(
-        self, ax_height=None, ax_width=None, dpi=None, **kwargs
+        self, ax_height=None, ax_width=None, dpi=None, interact=True, **kwargs
     ):
         # determine number of axes
         n_rows, n_cols = (1, 1)
@@ -224,19 +224,19 @@ class XArrayViewer(Viewer):
                 for j in range(n_cols):
                     self.artists[i][j].set_norm(self.cbar.norm)
 
-        # create interactive sliders for index dims
-        self.sliders = []
-        for d in self.index_dims:
-            slider = ipywidgets.SelectionSlider(
-                options=[(c, i) for i, c in enumerate(self.coords[d])],
-                description=d
-            )
-            self.sliders.append(slider)
+        if interact: # create interactive sliders for index dims
+            self.sliders = []
+            for d in self.index_dims:
+                slider = ipywidgets.SelectionSlider(
+                    options=[(c, i) for i, c in enumerate(self.coords[d])],
+                    description=d
+                )
+                self.sliders.append(slider)
 
-        ipywidgets.interact(
-            self.update_index,
-            **{d: s for d, s in zip(self.index_dims, self.sliders)}
-        )
+            ipywidgets.interact(
+                self.update_index,
+                **{d: s for d, s in zip(self.index_dims, self.sliders)}
+            )
 
     def update_index(self, **kwargs):
         coords = {d: self.coords[d][i] for d, i in kwargs.items()}

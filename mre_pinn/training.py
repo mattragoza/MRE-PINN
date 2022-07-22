@@ -77,6 +77,7 @@ class TestEvaluation(PeriodicCallback):
         save_prefix=None,
         plot=True,
         view=True,
+        interact=False
     ):
         assert save_every % test_every == 0
         super().__init__(period=test_every)
@@ -84,6 +85,7 @@ class TestEvaluation(PeriodicCallback):
         self.batch_size = batch_size
         self.plot = plot
         self.view = view
+        self.interact = interact
 
         index_cols = [
             'iteration',
@@ -115,13 +117,13 @@ class TestEvaluation(PeriodicCallback):
     def test_evaluate(self, data, save=True):    
         arrays = self.compute_arrays(self.data)
         metrics = self.compute_metrics(arrays)
-        self.update_arrays(arrays, save)
-        self.update_metrics(metrics, save)
+        self.update_arrays(arrays)
+        self.update_metrics(metrics)
         if self.plot:
-            self.update_plots(save)
+            self.update_plots()
         if self.view:
-            self.update_viewers(save)
-        if save: # save model state
+            self.update_viewers()
+        if save and self.save_prefix: # save model state
             self.model.save(self.save_prefix + '_model')
 
     def compute_arrays(self, data):
@@ -262,7 +264,12 @@ class TestEvaluation(PeriodicCallback):
             for i, array in enumerate(arrays):
                 kwargs = visual.get_color_kws(array)
                 viewer = visual.XArrayViewer(
-                    array, row='domain', col='variable', dpi=25, **kwargs
+                    array,
+                    row='domain',
+                    col='variable',
+                    dpi=25,
+                    interact=self.interact,
+                    **kwargs
                 )
                 self.viewers.append(viewer)
         if self.save_prefix and save:
@@ -281,7 +288,7 @@ class SummaryDisplay(deepxde.display.TrainingDisplay):
 
 
 def normalized_l2_loss_fn(y):
-    norm = np.linalg.norm(y).mean()
+    norm = np.linalg.norm(y, axis=1).mean()
     def loss_fn(y_true, y_pred):
         return torch.mean(
             torch.norm(y_true - y_pred, dim=1) / norm
