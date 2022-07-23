@@ -267,15 +267,17 @@ class TestEvaluation(PeriodicCallback):
                     array,
                     row='domain',
                     col='variable',
-                    dpi=25,
+                    y='y' if 'y' in self.data.field.spatial_dims else None,
+                    ax_width=2,
                     interact=self.interact,
                     **kwargs
                 )
                 self.viewers.append(viewer)
         if self.save_prefix and save:
+            curr_iter = self.model.train_state.step
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
-                viewer.to_png(f'{self.save_prefix}_{array_name}.png')
+                viewer.to_png(f'{self.save_prefix}_{array_name}_{curr_iter}.png')
 
 
 class SummaryDisplay(deepxde.display.TrainingDisplay):
