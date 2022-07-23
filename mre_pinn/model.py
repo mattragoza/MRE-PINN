@@ -16,7 +16,9 @@ def get_activ_fn(key):
     return {
         's': torch.sin,
         'g': gaussian,
-        'i': cis
+        'i': cis,
+        'r': torch.nn.functional.leaky_relu, 
+        't': torch.tanh
     }[key]
 
 
@@ -151,7 +153,8 @@ class FFNN(torch.nn.ModuleList):
             if i < len(self.linears) - 1: # hidden layer
                 output = 1
                 for j, linear in enumerate(linear):
-                    output *= self.activ_fn[j](linear(input))
+                    f = torch.sin if i == 0 else self.activ_fn[j]
+                    output *= f(linear(input))
 
                 if self.dense: # dense connections
                     input = torch.cat([input, output], dim=1)
