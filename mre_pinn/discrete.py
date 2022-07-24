@@ -93,7 +93,7 @@ def fft(u, shift=True):
 
 def power_spectrum(u, n_bins=10):
     '''
-    Compute spatial power spectral density.
+    Compute power density wrt spatial frequency.
     '''
     # compute power spectrum
     ps = np.abs(fft(u))**2
@@ -102,9 +102,10 @@ def power_spectrum(u, n_bins=10):
     # compute spatial frequency radii for binning
     x = ps.field.spatial_points(reshape=False, standardize=True)
     r = np.linalg.norm(x, ord=2, axis=-1)
-    ps = ps.assign_coords(spatial_frequency=(ps.field.spatial_dims, r))
+    ps = ps.assign_coords(spatial_frequency=(ps.field.spatial_dims, r * n_bins))
 
     # take mean across spatial frequency bins
-    bins = np.linspace(0, 1, n_bins + 1, endpoint=True)
+    bins = np.linspace(0, n_bins, n_bins + 1, endpoint=True)
     ps = ps.groupby_bins('spatial_frequency', bins=bins).mean(...)
     return ps #.values
+

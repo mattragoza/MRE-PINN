@@ -3,7 +3,7 @@ import numpy as np
 import xarray as xr
 import scipy.io
 
-from .utils import print_if
+from .utils import print_if, as_xarray
 from . import discrete
 
 
@@ -19,6 +19,9 @@ def load_bioqic_dataset(
     data, ndim = select_data_subset(data, frequency, xyz_slice)
     print(data)
 
+    # convert region to a coordinate label
+    data = data.assign_coords(spatial_region=data.spatial_region)
+
     # direct Helmholtz inversion via discrete laplacian
     data['Lu'] = discrete.laplacian(data['u'])
     data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'])
@@ -27,6 +30,8 @@ def load_bioqic_dataset(
     if downsample:
         downsample = {d: downsample for d in data.field.spatial_dims}
         test_data = data.coarsen(**downsample).mean()
+        test_data['spatial_region'] = data.spatial_region.coarsen(**downsample).max()
+        test_data = test_data.assign_coords(spatial_region=test_data.spatial_region)
     else:
         test_data = data.copy()
 
@@ -49,13 +54,15 @@ def load_bioqic_fem_box_data(data_root, verbose=True):
         The frequencies are 50-100 Hz by 10 Hz.
         The spatial dimensions are in meters.
     '''
-    data_root  = pathlib.Path(data_root)
-    wave_file  = data_root / 'four_target_phantom.mat'
-    elast_file = data_root / 'fem_box_ground_truth.npy'
+    data_root = pathlib.Path(data_root)
+    wave_file = data_root / 'four_target_phantom.mat'
+    elast_file = data_root / 'fem_box_elastogram.npy'
+    region_file = data_root / 'fem_box_regions.npy'
 
     # load true wave image and elastogram
     u = load_mat_data(wave_file, verbose)[0]['u_ft'].T
     mu = load_np_data(elast_file, verbose)
+    sr = load_np_data(region_file, verbose)
 
     # spatial resolution in meters
     dx = 1e-3
@@ -80,9 +87,18 @@ def load_bioqic_fem_box_data(data_root, verbose=True):
     }
     mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
 
+    sr_dims = ['z', 'x', 'y']
+    sr_coords = {
+        'z': np.arange(sr.shape[0]) * dx,
+        'x': np.arange(sr.shape[1]) * dx,
+        'y': np.arange(sr.shape[2]) * dx,
+    }
+    sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
+
     # combine into a data set and transpose the dimensions
-    data = xr.Dataset(dict(u=u, mu=mu))
+    data = xr.Dataset(dict(u=u, mu=mu, spatial_region=sr))
     data = data.transpose('frequency', 'x', 'y', 'z', 'component')
+
     return data
 
 
@@ -106,7 +122,9 @@ def select_data_subset(
     '''
     # spatial downsampling
     if downsample and downsample > 1:
-        data = data.coarsen(x=downsample, y=downsample, z=downsample).mean()
+        downsample = {'x': downsample, 'y': downsample, 'z': downsample}
+        data = data.coarsen(**downsample).mean()
+        data['spatial_region'] = data.spatial_region.coarsen(**downsample).max()
 
     # single frequency
     if frequency and frequency not in {'all', 'multi'}:

@@ -596,6 +596,24 @@ def elast_color_map(n_colors=255, symmetric=False):
     )
 
 
+def region_color_map(n_colors=255):
+    '''
+    Create a colormap for segmentation regions
+    from white, red, yellow, green, to blue.
+    '''
+    white  = (1, 1, 1)
+    red    = (1, 0, 0)
+    yellow = (1, 1, 0)
+    green  = (0, 0.8, 0)
+    blue   = (0, 0, 1)
+
+    colors = [white, red, yellow, green, blue]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='elast', colors=colors, N=n_colors
+    )
+
+
 def get_color_kws(array):
     '''
     Get a dictionary of colormap arguments

@@ -92,7 +92,8 @@ class TestEvaluation(PeriodicCallback):
             'variable_type',
             'variable_source',
             'variable_name',
-            'spatial_frequency_bin'
+            'spatial_frequency_bin',
+            'spatial_region',
         ]
         self.metrics = pd.DataFrame(columns=index_cols)
         self.metrics.set_index(index_cols, inplace=True)
@@ -202,14 +203,21 @@ class TestEvaluation(PeriodicCallback):
 
             for var_src, var_name in zip(sources, array['variable'].values):
                 a = array.sel(variable=var_name)
-                index = (iter_, var_type, var_src, var_name, 'all')
-                metric = (index, 'norm', np.linalg.norm(a))
+                value = np.mean(np.abs(a)**2)
+                index = (iter_, var_type, var_src, var_name, 'all', 'all')
+                metric = (index, 'mean_squared_abs_value', value)
                 metrics.append(metric)
 
                 ps = discrete.power_spectrum(a)
-                for f_bin, power in zip(ps.spatial_frequency_bins.values, ps.values):
-                    index = (iter_, var_type, var_src, var_name, f_bin.right)
-                    metric = (index, 'power', power)
+                for f_bin, value in zip(ps.spatial_frequency_bins.values, ps.values):
+                    index = (iter_, var_type, var_src, var_name, f_bin.right, 'all')
+                    metric = (index, 'power_density', value)
+                    metrics.append(metric)
+
+                mav = np.abs(a).groupby('spatial_region').median(...)
+                for region, value in zip(mav.spatial_region.values, mav.values):
+                    index = (iter_, var_type, var_src, var_name, 'all', region)
+                    metric = (index, 'mean_abs_value', value)
                     metrics.append(metric)
 
         return metrics
@@ -233,26 +241,37 @@ class TestEvaluation(PeriodicCallback):
         try:
             self.norm_plot.update_data(data)
             self.freq_plot.update_data(data[data.variable_source == 'residual'])
+            self.region_plot.update_data(data[data.variable_type == 'elastogram'])
         except AttributeError:
             self.norm_plot = visual.DataViewer(
                 data,
                 x='iteration',
-                y='norm',
+                y='mean_squared_abs_value',
                 col='variable_type',
                 hue='variable_source'
             )
             self.freq_plot = visual.DataViewer(
                 data[data.variable_source == 'residual'],
                 x='iteration',
-                y='power',
+                y='power_density',
                 col='variable_type',
                 #row='variable_source',
                 hue='spatial_frequency_bin',
                 palette='Blues_r',
             )
+            self.region_plot = visual.DataViewer(
+                data[data.variable_type == 'elastogram'],
+                x='iteration',
+                y='mean_abs_value',
+                col='variable_source',
+                #row='variable_type',
+                hue='spatial_region',
+                palette='Greens_r'
+            )
         if self.save_prefix and save:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
+            self.region_plot.to_png(self.save_prefix + '_train_regions.png')
 
     def update_viewers(self, save=True):
         arrays = self.arrays
@@ -294,5 +313,14 @@ def normalized_l2_loss_fn(y):
     def loss_fn(y_true, y_pred):
         return torch.mean(
             torch.norm(y_true - y_pred, dim=1) / norm
+        )
+    return loss_fn
+
+
+def standardized_msae_loss_fn(y):
+    variance = torch.var(torch.as_tensor(y))
+    def loss_fn(y_true, y_pred):
+        return torch.mean(
+            torch.abs(y_true - y_pred)**2 / variance
         )
     return loss_fn
