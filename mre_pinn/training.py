@@ -214,7 +214,7 @@ class TestEvaluation(PeriodicCallback):
                     metric = (index, 'power_density', value)
                     metrics.append(metric)
 
-                mav = np.abs(a).groupby('spatial_region').median(...)
+                mav = np.abs(a.real).groupby('spatial_region').median(...)
                 for region, value in zip(mav.spatial_region.values, mav.values):
                     index = (iter_, var_type, var_src, var_name, 'all', region)
                     metric = (index, 'mean_abs_value', value)

@@ -13,25 +13,25 @@ def train(
     # data settings
     data_root='data/BIOQIC',
     data_name='fem_box',
-    frequency='multi',
-    xyz_slice='3D',
+    frequency=80,
+    xyz_slice='2D',
 
     # pde settings
-    pde_name='helmholtz',
+    pde_name='hetero',
 
     # model settings
-    omega0=32,
+    omega0=16,
     n_layers=5,
     n_hidden=128,
-    activ_fn='s',
+    activ_fn='t',
 
     # training settings
     learning_rate=1e-4,
-    pde_loss_wt=1e-7,
+    pde_loss_wt=1e-8,
     data_loss_wt=1,
     optimizer='adam',
-    batch_size=128,
-    n_domain=128,
+    batch_size=80,
+    n_domain=48,
     n_iters=100000,
 
     # testing settings
@@ -53,7 +53,7 @@ def train(
 
     # initialize the PDE, geometry, and boundary conditions
     pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-    geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0))
+    geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0) + 1e-5)
     bc = mre_pinn.fields.VectorFieldBC(points=x, values=u)
 
     # define model architecture
@@ -74,7 +74,7 @@ def train(
     model = mre_pinn.training.MREPINNModel(
         net, pde, geom, bc,
         batch_size=batch_size,
-        num_domain=batch_size,
+        num_domain=n_domain,
         num_boundary=0,
         train_distribution='pseudo',
         anchors=None
@@ -83,7 +83,7 @@ def train(
         optimizer=optimizer,
         lr=learning_rate,
         loss_weights=[pde_loss_wt, data_loss_wt],
-        loss=mre_pinn.training.normalized_l2_loss_fn(u)
+        loss=mre_pinn.training.standardized_msae_loss_fn(u)
     )
     test_eval = mre_pinn.training.TestEvaluation(
         data=test_data,
