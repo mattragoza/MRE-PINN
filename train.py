@@ -31,6 +31,7 @@ def train(
     data_loss_wt=1,
     optimizer='adam',
     batch_size=80,
+    pde_distrib='pseudo',
     n_domain=48,
     n_iters=100000,
 
@@ -76,7 +77,7 @@ def train(
         batch_size=batch_size,
         num_domain=n_domain,
         num_boundary=0,
-        train_distribution='pseudo',
+        train_distribution=pde_distrib,
         anchors=None
     )
     model.compile(
