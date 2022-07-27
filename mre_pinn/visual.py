@@ -128,7 +128,15 @@ class XArrayViewer(Viewer):
         return index, row_label, col_label
 
     def initialize_subplots(
-        self, ax_height=None, ax_width=None, dpi=None, interact=True, **kwargs
+        self,
+        ax_height=None,
+        ax_width=None,
+        dpi=None,
+        cbar_width=0.25,
+        space=[0.25, 0.50],
+        pad=[0.95, 0.75, 0.65, 0.45],
+        interact=True,
+        **kwargs
     ):
         # determine number of axes
         n_rows, n_cols = (1, 1)
@@ -179,9 +187,9 @@ class XArrayViewer(Viewer):
             n_cols=n_cols,
             ax_height=ax_height,
             ax_width=ax_width,
-            cbar_width=0.25 * do_image_plot,
-            space=[0.25, 0.50],
-            pad=[0.95, 0.75, 0.65, 0.45]
+            cbar_width=cbar_width * do_image_plot,
+            space=space,
+            pad=pad
         )
 
         # plot the array data and store the artists
