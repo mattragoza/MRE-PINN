@@ -15,6 +15,7 @@ def train(
     data_name='fem_box',
     frequency=80,
     xyz_slice='2D',
+    noise_ratio=0,
 
     # pde settings
     pde_name='hetero',
@@ -44,7 +45,8 @@ def train(
         data_root=data_root,
         data_name=data_name,
         frequency=frequency,
-        xyz_slice=xyz_slice
+        xyz_slice=xyz_slice,
+        noise_ratio=noise_ratio
     )
 
     # convert to vector/scalar fields and coordinates
