@@ -25,16 +25,24 @@ def add_complex_noise(array, noise_ratio, axis=0):
 
 
 def load_bioqic_dataset(
-    data_root, data_name, frequency=None, xyz_slice=None, downsample=2, noise_ratio=0
+    data_root,
+    data_name,
+    frequency=None,
+    xyz_slice=None,
+    downsample=2,
+    noise_ratio=0,
+    verbose=True
 ):
     if data_name == 'fem_box':
-        data = load_bioqic_fem_box_data(data_root)
+        data = load_bioqic_fem_box_data(data_root, verbose)
     else:
         raise ValueError(f'unrecognized data name: {data_name}')
 
     # select data subset
-    data, ndim = select_data_subset(data, frequency, xyz_slice)
-    print(data)
+    data, ndim = select_data_subset(data, frequency, xyz_slice, verbose=verbose)
+
+    if verbose:
+        print(data)
 
     # convert region to a coordinate label
     data = data.assign_coords(spatial_region=data.spatial_region)
@@ -127,7 +135,8 @@ def select_data_subset(
     data,
     frequency=None,
     xyz_slice=None,
-    downsample=None
+    downsample=None,
+    verbose=True
 ):
     '''
     Args:
@@ -149,10 +158,12 @@ def select_data_subset(
 
     # single frequency
     if frequency and frequency not in {'all', 'multi'}:
-        print('Single frequency', end=' ')
+        if verbose:
+            print('Single frequency', end=' ')
         data = data.sel(frequency=[frequency])
     else:
-        print('Multi frequency', end=' ')
+        if verbose:
+            print('Multi frequency', end=' ')
 
     x_slice, y_slice, z_slice = parse_xyz_slice(xyz_slice)
 
@@ -171,7 +182,8 @@ def select_data_subset(
     # number of spatial dimensions
     ndim = (x_slice is None) + (y_slice is None) + (z_slice is None)
     assert ndim > 0, 'no spatial dimensions'
-    print(f'{ndim}D')
+    if verbose:
+        print(f'{ndim}D')
 
     # subset the displacement components
     data = data.sel(component=['z', 'y', 'x'][:ndim])

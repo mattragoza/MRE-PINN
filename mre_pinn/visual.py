@@ -740,13 +740,13 @@ def plot_line_1d(ax, a, resolution, **kwargs):
 
 
 def imshow(ax, a, resolution=1, **kwargs):
-    if im.ndim == 2:
+    if a.ndim == 2:
         n_x, n_y = a.shape
         a_T = a.T
-    elif im.ndim == 3:
+    elif a.ndim == 3:
         n_x, n_y, n_c = a.shape
         a_T = np.transpose(a, (1, 0, 2))
-    extent = (0, n_x * resolution, 0, n_y * resolution)
+    extent = (0, (n_x - 1) * resolution, 0, (n_y - 1) * resolution)
     return ax.imshow(a_T, origin='lower', extent=extent, **kwargs)
 
 
