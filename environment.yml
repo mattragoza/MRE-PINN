@@ -12,6 +12,8 @@ dependencies:
   - cudatoolkit=11.3
   - pytorch::pytorch<1.12
   - deepxde
+  - fenics-dolfinx
+  - petsc=*=complex*
   - matplotlib
   - seaborn
   - notebook
