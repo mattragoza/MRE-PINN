@@ -222,6 +222,7 @@ class XArrayViewer(Viewer):
                         xlabel=x_dim,
                         ylabel=row_label + y_dim,
                         title=col_label,
+                        interpolation_stage='rgba',
                         **kwargs
                     )
                     self.artists[i][j] = image
@@ -622,7 +623,7 @@ def region_color_map(n_colors=255):
     )
 
 
-def get_color_kws(array):
+def get_color_kws(array, pct=95, scale=1.1):
     '''
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.
@@ -632,7 +633,7 @@ def get_color_kws(array):
         vmax = 1e4
     else:
         cmap = wave_color_map()
-        vmax = np.percentile(np.abs(array), 95) * 1.1
+        vmax = np.percentile(np.abs(array), pct) * scale
     return dict(cmap=cmap, vmax=vmax)
 
 
