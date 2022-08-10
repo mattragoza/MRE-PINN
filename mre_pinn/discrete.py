@@ -15,7 +15,11 @@ def grad(u, dim):
     Returns:
         du: An xarray of derivative values.
     '''
-    return u.differentiate(coord=dim)
+    try:
+        return u.differentiate(coord=dim)
+    except IndexError:
+        # singleton dim has no derivative
+        return xr.zeros_like(u)
 
 
 def jacobian(u, i, j):
