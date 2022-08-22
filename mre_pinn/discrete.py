@@ -1,5 +1,6 @@
 import numpy as np
 import xarray as xr
+import scipy.special
 
 from .utils import copy_metadata
 
@@ -113,3 +114,54 @@ def power_spectrum(u, n_bins=10):
     ps = ps.groupby_bins('spatial_frequency', bins=bins).mean(...)
     return ps #.values
 
+
+def sg_filter_nd(n, order=1, kernel_size=3):
+    '''
+    N-dimensional Savitsky-Golay filter.
+
+    This function creates a set of convolutional kernels
+    that, when applied to an array of data values, are
+    equivalent to fitting polynomials to local windows of
+    data and then evaluating them or their derivatives.
+
+    Args:
+        n: Number of spatial dimensions.
+        order: Order of polynomials to fit to each window.
+        kernel_size: Size of windows to fit with polynomials.
+    Returns:
+        A dict mapping from derivative orders (n-tuples of ints)
+            to conv kernels (numpy arrays of size kernel_size^n).
+    '''
+    assert kernel_size % 2 == 1, 'kernel_size must be odd'
+    
+    # relative coordinates of kernel values
+    half_size = kernel_size // 2
+    coords = np.arange(-half_size, half_size + 1)
+    coords = np.stack(np.meshgrid(*[coords] * n), axis=-1).reshape(-1, n)
+    n_values = len(coords)
+    
+    # powers of polynomial terms
+    powers = np.arange(order + 1)
+    powers = np.stack(np.meshgrid(*[powers] * n), axis=-1).reshape(-1, n)
+    powers = powers[powers.sum(axis=1) <= order]
+    n_terms = len(powers)
+    
+    assert n_values >= n_terms, 'order is too high for kernel_size'
+    
+    # set up linear system of equations
+    A = np.zeros((n_values, n_terms))
+    for i in range(n_values):
+        for j in range(n_terms):
+            A[i,j] = np.power(coords[i], powers[j]).prod()
+    
+    # compute the pseudo-inverse of the coefficient matrix
+    kernels = np.linalg.pinv(A)
+    
+    # this factor is needed for correct derivative kernels
+    kernels *= scipy.special.factorial(powers).prod(axis=1, keepdims=True)
+
+    kernel_shape = (kernel_size,) * n
+    kernels = kernels.reshape(-1, *kernel_shape)
+    
+    # return mapping from derivative order to kernel
+    return {tuple(p): k for p, k in zip(powers, kernels)}
