@@ -6,43 +6,57 @@ import ufl, dolfinx
 from mpi4py import MPI
 from petsc4py.PETSc import ScalarType as dtype
 
+from .utils import as_xarray
+
 
 class FEM(object):
 
-    def __init__(self, data):
+    def __init__(self, data, n_mesh):
 
+        self.data = data
+        ndim = data.field.n_spatial_dims
         x = data.u.field.spatial_points()
         u = data.u.field.values()
 
         # discretize the domain on a mesh
-        self.mesh = dolfinx.mesh.create_rectangle(
-            comm=MPI.COMM_WORLD,
-            points=[x.min(axis=0), x.max(axis=0)],
-            n=data.u.field.spatial_shape,
-            cell_type=dolfinx.mesh.CellType.triangle,
-            diagonal=dolfinx.mesh.DiagonalType.right_left
-        )
+        if ndim == 2:
+            self.mesh = dolfinx.mesh.create_rectangle(
+                comm=MPI.COMM_WORLD,
+                points=[x.min(axis=0), x.max(axis=0)],
+                n=data.u.field.spatial_shape,
+                cell_type=dolfinx.mesh.CellType.triangle,
+                diagonal=dolfinx.mesh.DiagonalType.right_left
+            )
+        elif ndim == 1:
+            self.mesh = dolfinx.mesh.create_interval(
+                comm=MPI.COMM_WORLD,
+                points=[x.min(axis=0), x.max(axis=0)],
+                nx=n_mesh, #data.u.field.spatial_shape[0]
+            )
 
         # define the FEM basis function spaces
-        ndim = data.field.n_spatial_dims
         self.scalar_space = dolfinx.fem.FunctionSpace(
-            self.mesh, ('Lagrange', 1)
+            self.mesh, ('CG', 1)
         )
         self.vector_space = dolfinx.fem.VectorFunctionSpace(
-            self.mesh, ('Lagrange', 1), dim=ndim
+            self.mesh, ('CG', 1), dim=ndim
         )
         self.tensor_space = dolfinx.fem.TensorFunctionSpace(
-            self.mesh, ('Lagrange', 1), shape=(ndim, ndim)
+            self.mesh, ('CG', 1), shape=(ndim, ndim)
         )
 
         # setup physical problem and function spaces
         self.rho = 1000
         self.omega = 2 * np.pi * data.frequency.values.item()
 
-        print(x.shape, u.shape)
-
         # function for interpolating wave image into FEM basis
-        u_interp = scipy.interpolate.LinearNDInterpolator(points=x, values=u)
+        if ndim > 1:
+            u_interp = scipy.interpolate.LinearNDInterpolator(x, u)
+        else:
+            u_interp = scipy.interpolate.interp1d(
+                x[:,0], u[:,0], bounds_error=False, fill_value='extrapolate'
+            )
+        self.u_interp = u_interp
         self.u_func = dolfinx.fem.Function(self.vector_space)
 
         def f(x):
@@ -57,21 +71,31 @@ class FEM(object):
 
     def solve(self):
 
-        Ax = self.mu_func * ufl.inner(
+        # construct bilinear form
+        Auv = self.mu_func * ufl.inner(
             ufl.grad(self.u_func), ufl.grad(self.v_func)
         ) * ufl.dx
 
-        b = self.rho * self.omega**2 * ufl.inner(
+        # construct inner product
+        bv = self.rho * self.omega**2 * ufl.inner(
             self.u_func, self.v_func
         ) * ufl.dx
 
+        # define the variational problem
         problem = dolfinx.fem.petsc.LinearProblem(
-            Ax, b, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
+            Auv, bv, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
         )
         self.mu_pred_func = problem.solve()
 
-    def __call__(self, x):
-        return eval_dolfinx_func(self.mu_pred_func, x)
+        x = self.data.u.field.spatial_points()
+        mu_pred = eval_dolfinx_func(self.mu_pred_func, x)
+        mu_pred = mu_pred.reshape(*self.data.mu.shape)
+        mu_pred = as_xarray(mu_pred, like=self.data.mu)
+
+        u_pred = eval_dolfinx_func(self.u_func, x)
+        u_pred = u_pred.reshape(*self.data.u.shape)
+        u_pred = as_xarray(u_pred, like=self.data.u)
+        return u_pred, mu_pred
 
 
 def get_containing_cells(mesh, x):
