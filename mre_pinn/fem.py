@@ -11,18 +11,20 @@ from .utils import as_xarray
 
 class FEM(object):
 
-    def __init__(self, data, n_mesh):
+    def __init__(self, data, n_mesh=None, extend=0):
 
         self.data = data
         ndim = data.field.n_spatial_dims
         x = data.u.field.spatial_points()
         u = data.u.field.values()
+        x_res = x[1] - x[0] if extend else 0
+        print(x_res, data.u.field.spatial_shape)
 
         # discretize the domain on a mesh
         if ndim == 2:
             self.mesh = dolfinx.mesh.create_rectangle(
                 comm=MPI.COMM_WORLD,
-                points=[x.min(axis=0), x.max(axis=0)],
+                points=[x.min(axis=0) - extend, x.max(axis=0) + extend],
                 n=data.u.field.spatial_shape,
                 cell_type=dolfinx.mesh.CellType.triangle,
                 diagonal=dolfinx.mesh.DiagonalType.right_left
@@ -30,8 +32,8 @@ class FEM(object):
         elif ndim == 1:
             self.mesh = dolfinx.mesh.create_interval(
                 comm=MPI.COMM_WORLD,
-                points=[x.min(axis=0), x.max(axis=0)],
-                nx=n_mesh, #data.u.field.spatial_shape[0]
+                points=[x.min(axis=0) - extend, x.max(axis=0) + extend],
+                nx=n_mesh or data.u.field.spatial_shape[0]
             )
 
         # define the FEM basis function spaces
