@@ -33,10 +33,11 @@ class XArrayViewer(Viewer):
         hue=None,
         row=None,
         col=None,
+        polar=False,
         verbose=False,
         **kwargs
     ):
-        xarray = self.preprocess_array(xarray)
+        xarray = self.preprocess_array(xarray, polar=polar)
 
         self.establish_dimensions(xarray.dims, x, y, hue, row, col)
 
@@ -46,7 +47,7 @@ class XArrayViewer(Viewer):
         self.set_array_internals(xarray)
         self.initialize_subplots(**kwargs)
 
-    def preprocess_array(self, xarray):
+    def preprocess_array(self, xarray, polar=False):
         '''
         Concatenate spatial with frequency domain.
         Also concatenate real and imaginary parts.
@@ -58,10 +59,16 @@ class XArrayViewer(Viewer):
             )
 
         if np.iscomplexobj(xarray):
-            xarray = xr.concat(
-                [xarray.real, xarray.imag],
-                dim=xr.DataArray(['real', 'imag'], dims=['part'])
-            )
+            if polar:
+                xarray = xr.concat(
+                    [np.abs(xarray), np.arctan(xarray.imag / xarray.real)],
+                    dim=xr.DataArray(['abs', 'angle'], dims=['part'])
+                )
+            else:
+                xarray = xr.concat(
+                    [xarray.real, xarray.imag],
+                    dim=xr.DataArray(['real', 'imag'], dims=['part'])
+                )
 
         return xarray
 
