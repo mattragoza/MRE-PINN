@@ -38,7 +38,7 @@ class FEM(object):
 
         # define the FEM basis function spaces
         self.scalar_space = dolfinx.fem.FunctionSpace(
-            self.mesh, ('CG', 1)
+            self.mesh, ('DG', 1)
         )
         self.vector_space = dolfinx.fem.VectorFunctionSpace(
             self.mesh, ('CG', 1), dim=ndim
