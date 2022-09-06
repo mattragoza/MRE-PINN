@@ -3,47 +3,170 @@ import xarray as xr
 import scipy.ndimage
 import scipy.interpolate
 
-# FENICSx imports
 import ufl, dolfinx
 from mpi4py import MPI
-from petsc4py.PETSc import ScalarType as dtype
 
 from .utils import as_xarray
-from .discrete import savgol_filter_nd
+from . import discrete
+
+
+class FEM(object):
+    '''
+    Solve Navier-Cauchy equation for steady-state
+    elastic wave vibration using finite elements.
+    '''
+    def __init__(
+        self,
+        data,
+        u_elem_type='CG-1',
+        mu_elem_type='CG-1',
+        align_nodes=False,
+        savgol_filter=False,
+    ):
+        self.data = data
+        x = data.field.spatial_points()
+
+        # initialize the mesh
+        mesh = create_mesh_from_data(data, align_nodes)
+
+        # determine the FEM element types
+        u_elem_type = parse_elem_type(u_elem_type)
+        mu_elem_type = parse_elem_type(mu_elem_type)
+
+        # define the FEM basis function spaces
+        ndim = data.field.n_spatial_dims
+        S = dolfinx.fem.FunctionSpace(mesh, mu_elem_type)
+        V = dolfinx.fem.VectorFunctionSpace(mesh, u_elem_type, dim=ndim)
+        T = dolfinx.fem.TensorFunctionSpace(mesh, u_elem_type, shape=(ndim, ndim))
+
+        if savgol_filter: # Savitzky-Golay filtering
+
+            # wave image-interpolating function
+            Ku = discrete.savgol_smoothing(data.u, order=2, kernel_size=3)
+            self.u_h = dolfinx.fem.Function(V)
+            self.u_h.interpolate(create_func_from_data(Ku))
+
+            # Jacobian-interpolating function
+            Ju = discrete.savgol_jacobian(data.u, order=2, kernel_size=3)
+            self.Ju_h = dolfinx.fem.Function(T)
+            self.Ju_h.interpolate(create_func_from_data(Ju))
+
+            # Laplacian-interpolating function
+            Lu = discrete.savgol_laplacian(data.u, order=2, kernel_size=3)
+            self.Lu_h = dolfinx.fem.Function(V)
+            self.Lu_h.interpolate(create_func_from_data(Lu))
+        else:
+            # wave image-interpolating function
+            self.u_h = dolfinx.fem.Function(V)
+            self.u_h.interpolate(create_func_from_data(data.u))
+
+        # trial and test functions
+        self.mu_h = ufl.TrialFunction(S)
+        self.v_h = ufl.TestFunction(V)
+
+    def solve(self, homogeneous=True):
+        from ufl import grad, inner, dx
+
+        # physical constants
+        rho = 1000
+        omega = 2 * np.pi * self.data.frequency.values.item()
+
+        # construct bilinear form
+        if hasattr(self, 'Lu_h'): # precomputed derivatives
+            Auv = -self.mu_h * inner(self.Lu_h, self.v_h) * dx
+            if not homogeneous:
+                Auv -= inner(grad(self.mu_h), self.Ju_h * self.v_h) * dx
+        else:
+            Auv = self.mu_h * inner(grad(self.u_h), grad(self.v_h)) * dx
+            if not homogeneous:
+                Auv -= inner(grad(self.mu_h), grad(self.u_h) * self.v_h) * dx
+
+        # construct inner product
+        bv = rho * omega**2 * inner(self.u_h, self.v_h) * dx
+
+        # define the variational problem
+        problem = dolfinx.fem.petsc.LinearProblem(
+            Auv, bv, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
+        )
+        self.mu_pred_h = problem.solve()
+
+    def predict(self, x):
+        mu_pred = eval_dolfinx_func(self.mu_pred_h, x)
+        mu_pred = mu_pred.reshape(*self.data.mu.shape)
+        mu_pred = as_xarray(mu_pred, like=self.data.mu)
+
+        u_pred = eval_dolfinx_func(self.u_h, x)
+        u_pred = u_pred.reshape(*self.data.u.shape)
+        u_pred = as_xarray(u_pred, like=self.data.u)
+        return u_pred, mu_pred
 
 
 def parse_elem_type(s):
+    '''
+    Parse a string as an FEM element type
+    using the format "{family}-{degree:d}",
+    for instance: "CG-1", "CG-2", "DG-0"
+    '''
     family, degree = s.split('-')
     return family, int(degree)
 
 
-def create_mesh_from_data(data, align_nodes, ret_bounds=False):
+def grid_info_from_data(data):
     '''
-    Create a mesh from the provided xarray data.
-
     Args:
         data: An xarray with spatial dims.
-        align_nodes: If True, align the mesh nodes
-            to the data points, otherwise align
-            the mesh cells to the data points.
     Returns:
-        A dolfinx mesh.
+        x_min, x_max, shape
     '''
-    # spatial dimensionality, points, and bounds
-    ndim = data.field.n_spatial_dims
     shape = np.array(data.field.spatial_shape)
     x = data.field.spatial_points()
-    x_min = x.min(axis=0)
-    x_max = x.max(axis=0)
+    x_min, x_max = x.min(axis=0), x.max(axis=0)
+    return x_min, x_max, shape
+
+
+def grid_to_mesh_info(x_min, x_max, shape, align_nodes):
+    '''
+    Args:
+        x_min: The minimum grid point.
+        x_max: The maximum grid point.
+        shape: The number of grid points along
+            each spatial dimension.
+        align_nodes: If True, align mesh nodes to
+            grid points, otherwise align centers
+            of mesh cells to grid points.
+    Returns:
+        x_min: The minimum mesh node.
+        x_max: The maximum mesh node.
+        shape: The number of cells along
+            each spatial dimension.
+    '''
+    # compute resolution in each dimension
     x_res = (x_max - x_min) / (shape - 1)
 
     if align_nodes: # align nodes to data
-        bounds = [x_min, x_max]
-        n_cells = [d - 1 for d in data.field.spatial_shape]
+        shape = [d - 1 for d in shape]
 
     else: # align cells to data
-        bounds = [x_min - x_res/2, x_max + x_res/2]
-        n_cells = data.field.spatial_shape
+        x_min -= x_res / 2
+        x_max += x_res / 2
+    
+    return x_min, x_max, shape
+
+
+def create_uniform_mesh(x_min, x_max, shape):
+    '''
+    Create a uniform hypercubic mesh with
+    the provided spatial extent and shape.
+
+    Args:
+        x_min: The minimum mesh node.
+        x_max: The maximum mesh node.
+        shape: The number of cells along
+            each spatial dimension.
+    Returns:
+        A dolfinx mesh.
+    '''
+    ndim = len(shape)
 
     # discretize the domain on a mesh
     if ndim == 3:
@@ -52,21 +175,29 @@ def create_mesh_from_data(data, align_nodes, ret_bounds=False):
     elif ndim == 2:
         mesh = dolfinx.mesh.create_rectangle(
             comm=MPI.COMM_WORLD,
-            points=bounds,
-            n=n_cells,
+            points=[x_min, x_max],
+            n=shape,
             cell_type=dolfinx.mesh.CellType.triangle,
             diagonal=dolfinx.mesh.DiagonalType.left_right
         )
     elif ndim == 1:
         mesh = dolfinx.mesh.create_interval(
             comm=MPI.COMM_WORLD,
-            points=bounds,
-            nx=n_cells[0]
+            points=[x_min, x_max],
+            nx=shape[0]
         )
-    if ret_bounds:
-        return mesh, bounds, n_cells
-    else:
-        return mesh
+    
+    return mesh
+
+
+def mesh_info_from_data(data, align_nodes):
+    x_min, x_max, shape = grid_info_from_data(data)
+    return grid_to_mesh_info(x_min, x_max, shape, align_nodes)
+
+
+def create_mesh_from_data(data, align_nodes):
+    x_min, x_max, shape = mesh_info_from_data(data, align_nodes)
+    return create_uniform_mesh(x_min, x_max, shape)
 
 
 def create_func_from_data(data):
@@ -79,9 +210,9 @@ def create_func_from_data(data):
         data: An xarray with D spatial dims.
     Returns:
         A function that linearly interpolates
-            between the data values.
+            between the provided data values.
         Args:
-            x: (3, N) array of spatial points.
+            x_T: (3, N) array of spatial points.
         Returns:
             (K, N) array of interpolated values,
                 where K is the product of non-spatial dims.
@@ -106,144 +237,16 @@ def create_func_from_data(data):
     return func
 
 
-class FEM(object):
-    '''
-    Solve Navier-Cauchy equation for steady-state
-    elastic wave vibration using finite elements.
-    '''
-    def __init__(
-        self,
-        data,
-        u_elem_type='CG-2',
-        mu_elem_type='DG-0',
-        align_nodes=True,
-        savgol_filter=False,
-    ):
-        self.data = data
-        self.mesh = create_mesh_from_data(data, align_nodes)
-
-        ndim = data.field.n_spatial_dims
-        shape = np.array(data.field.spatial_shape)
-        x = data.field.spatial_points()
-        x_min = x.min(axis=0)
-        x_max = x.max(axis=0)
-        x_res = (x_max - x_min) / (shape - 1)
-
-        # determine the FEM element types
-        self.u_elem_type = parse_elem_type(u_elem_type)
-        self.mu_elem_type = parse_elem_type(mu_elem_type)
-
-        # define the FEM basis function spaces
-        self.scalar_space = dolfinx.fem.FunctionSpace(
-            self.mesh, self.mu_elem_type
-        )
-        self.vector_space = dolfinx.fem.VectorFunctionSpace(
-            self.mesh, self.u_elem_type, dim=ndim
-        )
-        self.tensor_space = dolfinx.fem.TensorFunctionSpace(
-            self.mesh, self.u_elem_type, shape=(ndim, ndim)
-        )
-
-        if savgol_filter: # Savitzky-Golay filtering
-
-            # construct convolution kernels for smoothing/gradients
-            kernels = savgol_filter_nd(ndim, order=2, kernel_size=3)
-
-            # wave image-interpolating function
-            u = xr.zeros_like(data.u)
-            for component in range(ndim):
-                deriv_order = (0,) * ndim
-                u[0,...,component] = scipy.ndimage.convolve(
-                    data.u[0,...,component], kernels[deriv_order], mode='wrap'
-                )
-            self.u_func = dolfinx.fem.Function(self.vector_space)
-            self.u_func.interpolate(create_func_from_data(u))
-
-            # Jacobian-interpolating function
-            new_dim = data.u.component.rename(component='gradient')
-            Ju = data.u.expand_dims({'gradient': new_dim}, axis=-1).copy()
-            for component in range(ndim):
-                for i, deriv_order in enumerate(np.eye(ndim, dtype=int)):
-                    deriv_order = tuple(deriv_order)
-                    Ju[0,...,component,i] = scipy.ndimage.convolve(
-                        data.u[0,...,component], kernels[deriv_order], mode='wrap'
-                    ) / x_res[i]
-            self.Ju_func = dolfinx.fem.Function(self.tensor_space)
-            self.Ju_func.interpolate(create_func_from_data(Ju))
-
-            # Laplacian-interpolating function
-            Lu = xr.zeros_like(data.u)
-            for component in range(ndim):
-                for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
-                    deriv_order = tuple(deriv_order)
-                    Lu[0,...,component] += scipy.ndimage.convolve(
-                        data.u[0,...,component], kernels[deriv_order], mode='wrap'
-                    ) / x_res[i]**2
-            self.Lu_func = dolfinx.fem.Function(self.vector_space)
-            self.Lu_func.interpolate(create_func_from_data(Lu))
-
-        else:
-            # wave image-interpolating function
-            self.u_func = dolfinx.fem.Function(self.vector_space)
-            self.u_func.interpolate(create_func_from_data(data.u))
-
-        # trial and test functions
-        self.mu_func = ufl.TrialFunction(self.scalar_space)
-        self.v_func = ufl.TestFunction(self.vector_space)
-
-    def solve(self, homogeneous=True):
-        precomputed_derivatives = hasattr(self, 'Lu_func')
-
-        # physical constants
-        rho = 1000
-        omega = 2 * np.pi * self.data.frequency.values.item()
-
-        # construct bilinear form
-        if precomputed_derivatives:
-            Auv = -self.mu_func * ufl.inner(
-                self.Lu_func, self.v_func
-            ) * ufl.dx
-        else:
-            Auv = self.mu_func * ufl.inner(
-                ufl.grad(self.u_func), ufl.grad(self.v_func)
-            ) * ufl.dx
-
-        if not homogeneous: # heterogeneous
-
-            if precomputed_derivatives:
-                Auv = Auv - ufl.inner(
-                    ufl.grad(self.mu_func), self.Ju_func * self.v_func
-                ) * ufl.dx
-            else:
-                Auv = Auv - ufl.inner(
-                    ufl.grad(self.mu_func), ufl.grad(self.u_func) * self.v_func
-                ) * ufl.dx
-
-        # construct inner product
-        bv = rho * omega**2 * ufl.inner(
-            self.u_func, self.v_func
-        ) * ufl.dx
-
-        # define the variational problem
-        problem = dolfinx.fem.petsc.LinearProblem(
-            Auv, bv, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
-        )
-        self.mu_pred_func = problem.solve()
-
-        x = self.data.u.field.spatial_points()
-        mu_pred = eval_dolfinx_func(self.mu_pred_func, x)
-        mu_pred = mu_pred.reshape(*self.data.mu.shape)
-        mu_pred = as_xarray(mu_pred, like=self.data.mu)
-
-        u_pred = eval_dolfinx_func(self.u_func, x)
-        u_pred = u_pred.reshape(*self.data.u.shape)
-        u_pred = as_xarray(u_pred, like=self.data.u)
-        return u_pred, mu_pred
-
-
 def get_containing_cells(mesh, x):
     '''
     Get indices of mesh cells that contain the given points.
+
+    Args:
+        mesh: A dolfinx mesh.
+        x: (N, 3) array of spatial points.
+    Returns:
+        A list of indices of the cells containing
+            each of the N spatial points.
     '''
     tree = dolfinx.geometry.BoundingBoxTree(mesh, mesh.geometry.dim)
     cells = dolfinx.geometry.compute_collisions(tree, x)
@@ -257,12 +260,56 @@ def eval_dolfinx_func(f, x):
 
     Args:
         f: A dolfinx FEM function.
-        x: A numpy array of points.
+        x: (N, D) array of spatial points.
     Returns:
-        Numpy array of f evaluated at x.
+        An (N, ...) array of f evaluated at x.
     '''
     x = np.concatenate([
         x, np.zeros((x.shape[0], 3 - x.shape[1]))
     ], axis=1)
     cells = get_containing_cells(f.function_space.mesh, x)
     return f.eval(x, cells)
+
+
+def main(
+
+    # data settings
+    data_root='data/BIOQIC',
+    data_name='fem_box',
+    frequency=80,
+    xyz_slice='2D',
+    noise_ratio=0,
+
+    # pde settings
+    pde_name='hetero',
+
+    # FEM settings
+    u_elem_type='CG-1',
+    mu_elem_type='CG-1',
+    align_nodes=False,
+    savgol_filter=False,
+
+    # other settings
+    save_prefix=None
+):
+    data, test_data = mre_pinn.data.load_bioqic_dataset(
+        data_root=data_root,
+        data_name=data_name,
+        frequency=frequency,
+        xyz_slice=xyz_slice,
+        noise_ratio=noise_ratio
+    )
+
+    fem = FEM(
+        data,
+        u_elem_type=u_elem_type,
+        mu_elem_type=mu_elem_type,
+        align_nodes=align_nodes,
+        savgol_filter=savgol_filter
+    )
+
+    # solve the variational problem
+    fem.solve()
+
+    # final test evaluation
+    assert False, 'TODO'

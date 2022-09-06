@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
 import scipy.special
+from functools import cache
 
 from .utils import copy_metadata
 
@@ -115,6 +116,7 @@ def power_spectrum(u, n_bins=10):
     return ps #.values
 
 
+@cache
 def savgol_filter_nd(n, order=1, kernel_size=3):
     '''
     N-dimensional Savitsky-Golay filter.
@@ -165,3 +167,44 @@ def savgol_filter_nd(n, order=1, kernel_size=3):
     
     # return mapping from derivative order to kernel
     return {tuple(p): k for p, k in zip(powers, kernels)}
+
+
+def savgol_smoothing(u, **kwargs):
+    ndim = u.field.n_spatial_dims
+    kernels = savgol_filter_nd(ndim, **kwargs)
+    Ku = xr.zeros_like(u)
+    for component in range(ndim):
+        deriv_order = (0,) * ndim
+        Ku[0,...,component] = scipy.ndimage.convolve(
+            u[0,...,component], kernels[deriv_order], mode='wrap'
+        )
+    return Ku
+
+
+def savgol_jacobian(u, **kwargs):
+    ndim = u.field.n_spatial_dims
+    x_res = u.field.spatial_resolution
+    kernels = savgol_filter_nd(ndim, **kwargs)
+    new_dim = u.component.rename(component='gradient')
+    Ju = u.expand_dims({'gradient': new_dim}, axis=-1).copy()
+    for component in range(ndim):
+        for i, deriv_order in enumerate(np.eye(ndim, dtype=int)):
+            deriv_order = tuple(deriv_order)
+            Ju[0,...,component,i] = scipy.ndimage.convolve(
+                u[0,...,component], kernels[deriv_order], mode='wrap'
+            ) / x_res[i]
+    return Ju
+
+
+def savgol_laplacian(u, **kwargs):
+    ndim = u.field.n_spatial_dims
+    x_res = u.field.spatial_resolution
+    kernels = savgol_filter_nd(ndim, **kwargs)
+    Lu = xr.zeros_like(u)
+    for component in range(ndim):
+        for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
+            deriv_order = tuple(deriv_order)
+            Lu[0,...,component] += scipy.ndimage.convolve(
+                u[0,...,component], kernels[deriv_order], mode='wrap'
+            ) / x_res[i]**2
+    return Lu

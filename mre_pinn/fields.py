@@ -67,6 +67,13 @@ class FieldAccessor(object):
         return tuple(self.xarray.sizes[d] for d in spatial_dims)
 
     @property
+    def spatial_resolution(self):
+        spatial_dims = self.xarray.field.spatial_dims
+        return np.array([
+            self.xarray[d].diff(d).mean() for d in spatial_dims
+        ])
+
+    @property
     def value_dims(self):
         return [d for d in ['component', 'gradient'] if d in self.xarray.sizes]
 
