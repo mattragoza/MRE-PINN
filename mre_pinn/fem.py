@@ -17,7 +17,7 @@ def parse_elem_type(s):
     return family, int(degree)
 
 
-def create_mesh_from_data(data, align_nodes):
+def create_mesh_from_data(data, align_nodes, ret_bounds=False):
     '''
     Create a mesh from the provided xarray data.
 
@@ -63,7 +63,10 @@ def create_mesh_from_data(data, align_nodes):
             points=bounds,
             nx=n_cells[0]
         )
-    return mesh
+    if ret_bounds:
+        return mesh, bounds, n_cells
+    else:
+        return mesh
 
 
 def create_func_from_data(data):
@@ -73,23 +76,33 @@ def create_func_from_data(data):
     assuming they are defined on a spatial grid.
 
     Args:
-        data: An xarray with spatial dims.
+        data: An xarray with D spatial dims.
     Returns:
         A function that linearly interpolates
             between the data values.
+        Args:
+            x: (3, N) array of spatial points.
+        Returns:
+            (K, N) array of interpolated values,
+                where K is the product of non-spatial dims.
     '''
     ndim = data.field.n_spatial_dims
     x = data.field.spatial_points()
     y = data.field.values()
 
     if ndim > 1:
-        interp = scipy.interpolate.LinearNDInterpolator(x, y)
+        interpolate = scipy.interpolate.LinearNDInterpolator(x, y)
     else:
-        interp = scipy.interpolate.interp1d(
+        interpolate = scipy.interpolate.interp1d(
             x[:,0], y[:,0], bounds_error=False, fill_value='extrapolate'
         )
-    def func(x):
-        return np.ascontiguousarray(interp(x[:ndim].T).T)
+
+    def func(x_T):
+        x = x_T[:ndim].T
+        y = interpolate(x)
+        y_T = y.reshape(len(x), -1).T
+        return np.ascontiguousarray(y_T)
+
     return func
 
 
@@ -131,22 +144,34 @@ class FEM(object):
             self.mesh, self.u_elem_type, shape=(ndim, ndim)
         )
 
-        if savgol_filter:
+        if savgol_filter: # Savitzky-Golay filtering
 
-            # construct kernels for Savitzky-Golay filtering
+            # construct convolution kernels for smoothing/gradients
             kernels = savgol_filter_nd(ndim, order=2, kernel_size=3)
 
+            # wave image-interpolating function
             u = xr.zeros_like(data.u)
             for component in range(ndim):
                 deriv_order = (0,) * ndim
                 u[0,...,component] = scipy.ndimage.convolve(
                     data.u[0,...,component], kernels[deriv_order], mode='wrap'
                 )
-
-            # wave image-interpolating function
             self.u_func = dolfinx.fem.Function(self.vector_space)
             self.u_func.interpolate(create_func_from_data(u))
 
+            # Jacobian-interpolating function
+            new_dim = data.u.component.rename(component='gradient')
+            Ju = data.u.expand_dims({'gradient': new_dim}, axis=-1).copy()
+            for component in range(ndim):
+                for i, deriv_order in enumerate(np.eye(ndim, dtype=int)):
+                    deriv_order = tuple(deriv_order)
+                    Ju[0,...,component,i] = scipy.ndimage.convolve(
+                        data.u[0,...,component], kernels[deriv_order], mode='wrap'
+                    ) / x_res[i]
+            self.Ju_func = dolfinx.fem.Function(self.tensor_space)
+            self.Ju_func.interpolate(create_func_from_data(Ju))
+
+            # Laplacian-interpolating function
             Lu = xr.zeros_like(data.u)
             for component in range(ndim):
                 for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
@@ -154,13 +179,10 @@ class FEM(object):
                     Lu[0,...,component] += scipy.ndimage.convolve(
                         data.u[0,...,component], kernels[deriv_order], mode='wrap'
                     ) / x_res[i]**2
-
-            # Laplacian-interpolating function
             self.Lu_func = dolfinx.fem.Function(self.vector_space)
             self.Lu_func.interpolate(create_func_from_data(Lu))
 
         else:
-
             # wave image-interpolating function
             self.u_func = dolfinx.fem.Function(self.vector_space)
             self.u_func.interpolate(create_func_from_data(data.u))

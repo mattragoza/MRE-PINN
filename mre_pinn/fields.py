@@ -43,7 +43,7 @@ class FieldAccessor(object):
 
     @property
     def dims(self):
-        return [d for d in self.xarray.dims if d != 'component']
+        return [d for d in self.xarray.dims if d not in {'component', 'gradient'}]
 
     @property
     def n_dims(self):
@@ -64,7 +64,20 @@ class FieldAccessor(object):
     @property
     def spatial_shape(self):
         spatial_dims = self.xarray.field.spatial_dims
-        return tuple(len(self.xarray[d]) for d in spatial_dims)
+        return tuple(self.xarray.sizes[d] for d in spatial_dims)
+
+    @property
+    def value_dims(self):
+        return [d for d in ['component', 'gradient'] if d in self.xarray.sizes]
+
+    @property
+    def n_value_dims(self):
+        return len(self.xarray.field.value_dims)
+
+    @property
+    def value_shape(self):
+        value_dims = self.xarray.field.value_dims
+        return tuple(self.xarray.sizes[d] for d in value_dims)
 
     @property
     def has_components(self):
@@ -73,6 +86,14 @@ class FieldAccessor(object):
     @property
     def n_components(self):
         return self.xarray.sizes['component']
+
+    @property
+    def has_gradient(self):
+        return 'gradient' in self.xarray.sizes
+    
+    @property
+    def n_gradient(self):
+        return self.xarray.sizes['gradient']
 
     def points(self, dims=None, *args, **kwargs):
         dims = dims or self.xarray.field.dims
@@ -83,10 +104,27 @@ class FieldAccessor(object):
         return self.xarray.field.points(dims, *args, **kwargs)
 
     def values(self):
-        if self.xarray.field.has_components: # vector field
+        has_components = self.xarray.field.has_components
+        has_gradient = self.xarray.field.has_gradient
+
+        if has_components and has_gradient: # tensor field
+            n_components = self.xarray.field.n_components
+            n_gradient = self.xarray.field.n_gradient
+            T = self.xarray.field.dims + ['component', 'gradient']
+            return (
+                self.xarray.transpose(*T).values.reshape(-1, n_components, n_gradient)
+            )
+
+        elif has_components: # vector field
             n_components = self.xarray.field.n_components
             T = self.xarray.field.dims + ['component']
             return self.xarray.transpose(*T).values.reshape(-1, n_components)
+
+        elif has_gradient: # covector field
+            n_gradient = self.xarray.field.n_gradient
+            T = self.xarray.field.dims + ['gradient']
+            return self.xarray.transpose(*T).values.reshape(-1, n_gradient)
+
         else: # scalar field
             return self.xarray.values.reshape(-1, 1)
 
