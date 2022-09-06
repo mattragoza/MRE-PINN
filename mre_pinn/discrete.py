@@ -115,7 +115,7 @@ def power_spectrum(u, n_bins=10):
     return ps #.values
 
 
-def sg_filter_nd(n, order=1, kernel_size=3):
+def savgol_filter_nd(n, order=1, kernel_size=3):
     '''
     N-dimensional Savitsky-Golay filter.
 
