@@ -6,8 +6,64 @@ import scipy.interpolate
 import ufl, dolfinx
 from mpi4py import MPI
 
-from .utils import as_xarray
+from .utils import as_xarray, minibatch
 from . import discrete
+
+
+class MultiFEM(object):
+    '''
+    An ensemble of FEMs for multifrequency inversion.
+    '''
+    def __init__(self, data, *args, **kwargs):
+        self.data = data
+        self.fems = [
+            FEM(data.sel(frequency=[f]), *args, **kwargs) for f in data.frequency
+        ]
+
+    def solve(self, *args, **kwargs):
+        frequencies = sorted(self.data.frequency)
+        for freq, fem in zip(frequencies, self.fems):
+            print(f'Solving FEM for frequency {freq}')
+            fem.solve(*args, **kwargs)
+
+    @minibatch
+    def predict(self, x):
+
+        # get indices that sort points
+        # NOTE that argsort does not behave as expected here
+        #   we want to sort first by frequency, then by space
+        sort_indices = np.array(sorted(
+            np.arange(len(x)), key=lambda i: tuple(x[i])
+        ))
+        x = x[sort_indices]
+
+        # group by frequency and evaluate FEMs
+        frequencies = sorted(self.data.frequency.values)
+
+        results = None
+        for freq, fem in zip(frequencies, self.fems):
+            print(f'Predicting FEM for frequency {freq}')
+
+            # subset of points at current frequency
+            at_freq = np.isclose(x[:,0], freq)
+            x_freq = x[at_freq][:,1:]
+            if len(x_freq) == 0:
+                continue
+
+            # compute FEM results for current points
+            freq_results = fem.predict(x_freq)
+
+            if not results:
+                results = list(freq_results)
+                continue
+
+            for i, y in enumerate(freq_results):
+                results[i] = np.concatenate([results[i], y], axis=0)
+
+        # return results in the original order
+        unsort_indices = np.argsort(sort_indices)
+        results = tuple(y[unsort_indices] for y in results)
+        return results
 
 
 class FEM(object):
