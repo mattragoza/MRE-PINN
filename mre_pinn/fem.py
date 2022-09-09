@@ -146,15 +146,13 @@ class FEM(object):
         )
         self.mu_pred_h = problem.solve()
 
+    @minibatch
     def predict(self, x):
+        u_pred  = eval_dolfinx_func(self.u_h, x)
         mu_pred = eval_dolfinx_func(self.mu_pred_h, x)
-        mu_pred = mu_pred.reshape(*self.data.mu.shape)
-        mu_pred = as_xarray(mu_pred, like=self.data.mu)
-
-        u_pred = eval_dolfinx_func(self.u_h, x)
-        u_pred = u_pred.reshape(*self.data.u.shape)
-        u_pred = as_xarray(u_pred, like=self.data.u)
-        return u_pred, mu_pred
+        lu_pred = 0 * u_pred
+        f_trac = f_body = 0 * u_pred
+        return u_pred, lu_pred, mu_pred, f_trac, f_body
 
 
 def parse_elem_type(s):
@@ -307,7 +305,19 @@ def get_containing_cells(mesh, x):
     tree = dolfinx.geometry.BoundingBoxTree(mesh, mesh.geometry.dim)
     cells = dolfinx.geometry.compute_collisions(tree, x)
     cells = dolfinx.geometry.compute_colliding_cells(mesh, cells, x)
-    return [cells.links(i)[0] for i in range(len(x))]
+    cell_indices = []
+    for i, x_i in enumerate(x):
+        try:
+            cell_indices.append(cells.links(i)[0])
+        except IndexError:
+            mesh_min = mesh.geometry.x.min(axis=0)
+            mesh_max = mesh.geometry.x.max(axis=0)
+            msg = (
+                f'Point {i} not contained in any mesh cell: {x_i}\n'
+                f'Mesh bounds: ({mesh_min}, {mesh_max})\n'
+            )
+            raise ValueError(msg)
+    return cell_indices
 
 
 def eval_dolfinx_func(f, x):
@@ -325,47 +335,3 @@ def eval_dolfinx_func(f, x):
     ], axis=1)
     cells = get_containing_cells(f.function_space.mesh, x)
     return f.eval(x, cells)
-
-
-def main(
-
-    # data settings
-    data_root='data/BIOQIC',
-    data_name='fem_box',
-    frequency=80,
-    xyz_slice='2D',
-    noise_ratio=0,
-
-    # pde settings
-    pde_name='hetero',
-
-    # FEM settings
-    u_elem_type='CG-1',
-    mu_elem_type='CG-1',
-    align_nodes=False,
-    savgol_filter=False,
-
-    # other settings
-    save_prefix=None
-):
-    data, test_data = mre_pinn.data.load_bioqic_dataset(
-        data_root=data_root,
-        data_name=data_name,
-        frequency=frequency,
-        xyz_slice=xyz_slice,
-        noise_ratio=noise_ratio
-    )
-
-    fem = FEM(
-        data,
-        u_elem_type=u_elem_type,
-        mu_elem_type=mu_elem_type,
-        align_nodes=align_nodes,
-        savgol_filter=savgol_filter
-    )
-
-    # solve the variational problem
-    fem.solve()
-
-    # final test evaluation
-    assert False, 'TODO'

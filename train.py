@@ -88,8 +88,9 @@ def train(
         loss_weights=[pde_loss_wt, data_loss_wt],
         loss=mre_pinn.training.standardized_msae_loss_fn(u)
     )
-    test_eval = mre_pinn.training.TestEvaluation(
+    test_eval = mre_pinn.testing.TestEvaluator(
         data=test_data,
+        model=model,
         batch_size=batch_size,
         test_every=test_every,
         save_every=save_every,
@@ -101,7 +102,7 @@ def train(
     model.train(n_iters, display_every=10, callbacks=[test_eval, sampler])
 
     # final test evaluation
-    test_eval.test_evaluate(data)
+    test_eval.test(data)
 
 
 if __name__ == '__main__':

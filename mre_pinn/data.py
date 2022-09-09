@@ -50,7 +50,7 @@ def load_bioqic_dataset(
         print(data)
 
     # convert region to a coordinate label
-    #data = data.assign_coords(spatial_region=data.spatial_region)
+    data = data.assign_coords(spatial_region=data.spatial_region)
 
     # add complex-valued noise to wave image
     if noise_ratio > 0:
