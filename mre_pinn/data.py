@@ -58,8 +58,9 @@ def load_bioqic_dataset(
         data['u'] = add_complex_noise(data['u'], noise_ratio)
 
     if baseline: # direct Helmholtz inversion via discrete laplacian
-        data['Lu'] = discrete.laplacian(data['u'])
-        data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'])
+        data['Ku'] = discrete.savgol_smoothing(data['u'], order=2, kernel_size=3)
+        data['Lu'] = discrete.savgol_laplacian(data['u'], order=2, kernel_size=3)
+        data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'], polar=True)
 
     # test on 4x downsampled data
     if downsample:
