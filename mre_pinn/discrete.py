@@ -77,15 +77,22 @@ def laplacian(u):
 
 def helmholtz_inversion(u, Lu, rho=1000, polar=False, eps=1e-8):
     '''
-    Direct algebraic inversion
-    of the Helmholtz equation.
+    Direct algebraic inversion of the Helmholtz equation.
+
+    Args:
+        u: An xarray of wave field values.
+        Lu: An xarray of Laplacian values.
+        rho: Material density parameter.
+        polar: Use polar complex representation.
+        eps: Numerical parameter.
+    Returns:
+        An xarray of shear modulus values.
     '''
     axes = tuple(range(1, u.ndim))
     omega = 2 * np.pi * u.frequency
     omega = np.expand_dims(omega, axis=axes)
 
     if polar:
-
         numer_abs_G = (rho * omega**2 * np.abs(u)).sum(axis=-1)
         denom_abs_G = np.abs(Lu).sum(axis=-1)
         abs_G = numer_abs_G / (denom_abs_G + eps)
@@ -96,7 +103,7 @@ def helmholtz_inversion(u, Lu, rho=1000, polar=False, eps=1e-8):
 
         return abs_G * np.exp(1j * phi_G)
     else:
-        return (-rho * omega**2 * u / (Lu + eps)).mean(axis=-1)
+        return (-rho * omega**2 * u).sum(axis=-1) / (Lu.sum(axis=-1) + eps)
 
 
 @copy_metadata

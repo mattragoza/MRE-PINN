@@ -636,12 +636,17 @@ def region_color_map(n_colors=255):
     from white, red, yellow, green, to blue.
     '''
     white  = (1, 1, 1)
+    gray   = (0.6, 0.6, 0.6)
     red    = (1, 0, 0)
     yellow = (1, 1, 0)
     green  = (0, 0.8, 0)
     blue   = (0, 0, 1)
+    purple = (1, 0, 1)
 
-    colors = [white, red, yellow, green, blue]
+    if n_colors == 5:
+        colors = [white, red, yellow, green, blue]
+    else:
+        colors = [white, gray, red, yellow, green, blue]
 
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='elast', colors=colors, N=n_colors

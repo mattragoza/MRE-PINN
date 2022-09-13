@@ -114,12 +114,12 @@ def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=Tr
         mu = load_np_data(elast_file, verbose)
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
-        mu = u[0,0,0]*0
+        mu = u[0,0,0] * 0
     try:
         sr = load_np_data(region_file, verbose)
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
-        sr = u[0,0,0]*0
+        sr = u[0,0,0] * 0
 
     # spatial resolution in meters
     dx = 1.5e-3
@@ -147,19 +147,20 @@ def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=Tr
     }
     u = xr.DataArray(u, dims=u_dims, coords=u_coords)
 
-    mu_dims = ['z', 'x', 'y']
+    mu_dims = ['frequency', 'x', 'y', 'z']
     mu_coords = {
+        'frequency': np.linspace(30, 100, mu.shape[0]), # Hz
         'x': np.arange(mu.shape[1]) * dx,
         'y': np.arange(mu.shape[2]) * dx,
-        'z': np.arange(mu.shape[0]) * dx,
+        'z': np.arange(mu.shape[3]) * dx,
     }
     mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
 
-    sr_dims = ['z', 'x', 'y']
+    sr_dims = ['x', 'y', 'z']
     sr_coords = {
-        'z': np.arange(sr.shape[0]) * dx,
-        'x': np.arange(sr.shape[1]) * dx,
-        'y': np.arange(sr.shape[2]) * dx,
+        'x': np.arange(sr.shape[0]) * dx,
+        'y': np.arange(sr.shape[1]) * dx,
+        'z': np.arange(sr.shape[2]) * dx,
     }
     sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
 
@@ -168,7 +169,7 @@ def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=Tr
     data = data.transpose('frequency', 't', 'x', 'y', 'z', 'component')
 
     # preprocess the data
-    return data
+    return preprocess_bioqic_phantom_data(data)
 
 
 def preprocess_bioqic_phantom_data(
@@ -232,17 +233,17 @@ def preprocess_bioqic_phantom_data(
 
             # Fourier transform across time
             u[f,...,c] = np.fft.fft(u[f,...,c], axis=0)
+            u[f,...,c] = u[f,harmonic:harmonic+1,...,c]
 
-            for t in range(u.shape[1]): # harmonic
-                for z in range(u.shape[4]): # z slice
+            for z in range(u.shape[4]): # z slice
 
-                    # Butterworth low-pass filtering
-                    u_ = np.fft.fftn(u[f,t,...,z,c])
-                    u_ = u_ * k_filter
-                    u[f,t,...,z,c] = np.fft.ifftn(u_)
+                # Butterworth low-pass filtering
+                u_ = np.fft.fftn(u[f,t,...,z,c])
+                u_ = u_ * k_filter
+                u[f,t,...,z,c] = np.fft.ifftn(u_)
 
     data['u'] = (data.u.dims, u)
-    return data.sel(t=harmonic) # select harmonic
+    return data.mean('t') # average other variables across time
 
 
 def lowpass_filter_2d(shape, resolution, threshold=100, order=1):
