@@ -565,6 +565,24 @@ class Player(FuncAnimation):
         self.slider.set_val(i)
 
 
+def grayscale_color_map(n_colors=255, reverse=False):
+    '''
+    Create a colormap for MRI magnitude images
+    from black to white.
+    '''
+    black = (0, 0, 0)
+    white = (1, 1, 1)
+
+    colors = [black, white]
+
+    if reverse:
+        colors = colors[::-1]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='magnitude', colors=colors, N=n_colors
+    )
+
+
 def wave_color_map(n_colors=255, reverse=False):
     '''
     Create a colormap for MRE wave images
@@ -635,7 +653,15 @@ def get_color_kws(array, pct=95, scale=1.1):
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.
     '''
-    if array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline'}:
+    if array.name == {'sr', 'mask', 'region', 'spatial_region'}:
+        cmap = region_color_map(n_colors=5)
+        return dict(cmap=cmap, vmin=0, vmax=5)
+    elif array.name in {'a', 'A', 'anatomy', 'anatomic'}:
+        cmap = grayscale_color_map()
+        vmin = 0
+        vmax = np.percentile(np.abs(array), pct) * scale
+        return dict(cmap=cmap, vmin=vmin, vmax=vmax)
+    elif array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline'}:
         cmap = wave_color_map(reverse=True)
         vmax = 1e4
     else:

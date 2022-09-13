@@ -50,7 +50,8 @@ def load_bioqic_dataset(
         print(data)
 
     # convert region to a coordinate label
-    data = data.assign_coords(spatial_region=data.spatial_region)
+    if 'spatial_region' in data.coords:
+        data = data.assign_coords(spatial_region=data.spatial_region)
 
     # add complex-valued noise to wave image
     if noise_ratio > 0:
@@ -70,21 +71,6 @@ def load_bioqic_dataset(
         test_data = data.copy()
 
     return data, test_data
-
-
-def apply_lowpass_filter(u, resolution, threshold=100, order=1):
-    nax = np.newaxis
-    n_x, n_y, n_z = u.shape
-    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * resolution)
-    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * resolution)
-    k_z = -(np.arange(n_z) - np.fix(n_z / 2)) / (n_z * resolution)
-    abs_k = np.sqrt(
-        np.abs(k_x)[:,nax,nax]**2 +
-        np.abs(k_y)[nax,:,nax]**2 +
-        np.abs(k_z)[nax,nax,:]**2
-    )
-    k = 1 / (1 + (abs_k / threshold)**(2 * order))
-    return np.fft.ifftn(np.fft.fft(u) * np.fft.ifftshift(k))
 
 
 def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=True):
@@ -123,54 +109,169 @@ def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=Tr
     # load true wave image and elastogram
     data, rev_axes = load_mat_data(wave_file, verbose)
     u = data[wave_var].T if rev_axes else data[wave_var]
-    #mu = load_np_data(elast_file, verbose)
-    #sr = load_np_data(region_file, verbose)
-
-    # preprocess the wave field
-    #   we estimate and remove the phase shift between images
-    #   and we extract the fundamental frequency across time
-    #   and we do some noise reduction
-    u_median = np.median(u, axis=range(2, 6), keepdims=True)
-    phase_shift = np.round(u_median / (2 * np.pi)) * (2 * np.pi)
-    u = u - phase_shift
-
-    # Gaussian filter
-    u = np.exp(1j * u)
-    for i in range(u.shape[0]): # driver frequency
-        for j in range(u.shape[1]): # displacement component
-            for k in range(u.shape[2]): # time step
-                u[i,j,k] = scipy.ndimage.gaussian_filter(
-                    u[i,j,k], sigma=0.65 * 2, truncate=3
-                )
-                u[i,j,k] /= np.abs(u[i,j,k])
-
-    # fourier transform to extract fundamental time frequency
-    u = np.fft.fftn(u, axes=[2])[:,:,1]
-
-    # Butterworth low-pass filter
-    for i in range(u.shape[0]): # driver frequency
-        for j in range(u.shape[1]): # displacement component
-            u[i,j] = apply_lowpass_filter(u[i,j], resolution=1.5e-3, threshold=100)
+    a = data['magnitude'].T if rev_axes else data['magnitude']
+    try:
+        mu = load_np_data(elast_file, verbose)
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        mu = u[0,0,0]*0
+    try:
+        sr = load_np_data(region_file, verbose)
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        sr = u[0,0,0]*0
 
     # spatial resolution in meters
     dx = 1.5e-3
 
     # convert to xarrays with metadata
-    u_dims = ['frequency', 'component', 'z', 'x', 'y']
+    a_dims = ['frequency', 'component', 't', 'z', 'x', 'y']
+    a_coords = {
+        'frequency': np.linspace(30, 100, a.shape[0]), # Hz
+        'component': ['z', 'x', 'y'],
+        't': np.arange(8),
+        'z': np.arange(a.shape[3]) * dx,
+        'x': np.arange(a.shape[4]) * dx,
+        'y': np.arange(a.shape[5]) * dx
+    }
+    a = xr.DataArray(a, dims=a_dims, coords=a_coords)
+
+    u_dims = ['frequency', 'component', 't', 'z', 'x', 'y']
     u_coords = {
         'frequency': np.linspace(30, 100, u.shape[0]), # Hz
         'component': ['z', 'x', 'y'],
-        'z': np.arange(u.shape[2]) * dx,
-        'x': np.arange(u.shape[3]) * dx,
-        'y': np.arange(u.shape[4]) * dx
+        't': np.arange(8),
+        'z': np.arange(u.shape[3]) * dx,
+        'x': np.arange(u.shape[4]) * dx,
+        'y': np.arange(u.shape[5]) * dx
     }
     u = xr.DataArray(u, dims=u_dims, coords=u_coords)
 
-    # combine into a data set and transpose the dimensions
-    data = xr.Dataset(dict(u=u))
-    data = data.transpose('frequency', 'x', 'y', 'z', 'component')
+    mu_dims = ['z', 'x', 'y']
+    mu_coords = {
+        'x': np.arange(mu.shape[1]) * dx,
+        'y': np.arange(mu.shape[2]) * dx,
+        'z': np.arange(mu.shape[0]) * dx,
+    }
+    mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
 
+    sr_dims = ['z', 'x', 'y']
+    sr_coords = {
+        'z': np.arange(sr.shape[0]) * dx,
+        'x': np.arange(sr.shape[1]) * dx,
+        'y': np.arange(sr.shape[2]) * dx,
+    }
+    sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
+
+    # combine into a data set and transpose the dimensions
+    data = xr.Dataset(dict(a=a, u=u, mu=mu, spatial_region=sr))
+    data = data.transpose('frequency', 't', 'x', 'y', 'z', 'component')
+
+    # preprocess the data
     return data
+
+
+def preprocess_bioqic_phantom_data(
+    data,
+    sigma=0.65,
+    truncate=3,
+    threshold=100,
+    order=1,
+    harmonic=1
+):
+    '''
+    Args:
+        data: An xarray dataset with the following dims:
+            (frequency, t, x, y, z, component)
+        sigma: Standard deviation for Gaussian filter.
+        truncate: Truncate argument for Gaussian filter.
+        threshold: Cutoff frequency for low-pass filter.
+        order: Frequency roll-off rate for low-pass filter.
+        harmonic: Index of time harmonic to select.
+    Returns:
+        The processed xarray dataset.
+    '''
+    data = data.copy()
+    resolution = data.field.spatial_resolution
+
+    # we estimate and remove the phase shift between images
+    #   and we extract the fundamental frequency across time
+    #   and we do some noise reduction
+
+    u_median = data.u.median(dim=['t', 'x', 'y', 'z'])
+    phase_shift = (u_median / (2 * np.pi)).round() * (2 * np.pi)
+    data['u'] = data.u - phase_shift
+
+    # (frequency, t, x, y, z, component)
+    u = data.u.values.astype(np.complex128)
+
+    # construct k-space lowpass filter
+    k_filter = lowpass_filter_2d(
+        u.shape[2:4], resolution[:2], threshold, order
+    )
+
+    for f in range(u.shape[0]): # frequency
+        for c in range(u.shape[5]): # component
+
+            for t in range(u.shape[1]): # time
+
+                # Gaussian phase smoothing
+                for z in range(u.shape[4]): # z slice
+                    u_ = np.exp(1j * u[f,t,...,z,c])
+                    u_ = scipy.ndimage.gaussian_filter(
+                        u_, sigma=sigma, truncate=truncate
+                    )
+                    u_ /= np.abs(u_)
+                    u[f,t,...,z,c] = np.angle(u_)
+
+                # gradient-based phase unwrapping
+                u_     = np.exp( 1j * u[f,t,...,c])
+                u_conj = np.exp(-1j * u[f,t,...,c])
+                u_x, u_y, u_z = np.gradient(u_, *resolution)
+                u[f,t,...,c] = (u_y * u_conj).imag
+
+            # Fourier transform across time
+            u[f,...,c] = np.fft.fft(u[f,...,c], axis=0)
+
+            for t in range(u.shape[1]): # harmonic
+                for z in range(u.shape[4]): # z slice
+
+                    # Butterworth low-pass filtering
+                    u_ = np.fft.fftn(u[f,t,...,z,c])
+                    u_ = u_ * k_filter
+                    u[f,t,...,z,c] = np.fft.ifftn(u_)
+
+    data['u'] = (data.u.dims, u)
+    return data.sel(t=harmonic) # select harmonic
+
+
+def lowpass_filter_2d(shape, resolution, threshold=100, order=1):
+    nax = np.newaxis
+    n_x, n_y = shape
+    x_res, y_res = resolution
+    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * x_res)
+    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * y_res)
+    abs_k = np.sqrt(
+        np.abs(k_x)[:,nax]**2 + np.abs(k_y)[nax,:]**2
+    )
+    k = 1 / (1 + (abs_k / threshold)**(2 * order))
+    return np.fft.ifftshift(k)
+
+
+def lowpass_filter_3d(shape, resolution, threshold=100, order=1):
+    nax = np.newaxis
+    n_x, n_y, n_z = shape
+    x_res, y_res, z_res = resolution
+    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * x_res)
+    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * y_res)
+    k_z = -(np.arange(n_z) - np.fix(n_z / 2)) / (n_z * z_res)
+    abs_k = np.sqrt(
+        np.abs(k_x)[:,nax,nax]**2 +
+        np.abs(k_y)[nax,:,nax]**2 +
+        np.abs(k_z)[nax,nax,:]**2
+    )
+    k = 1 / (1 + (abs_k / threshold)**(2 * order))
+    return np.fft.ifftshift(k)
 
 
 def load_bioqic_fem_box_data(data_root, verbose=True):
@@ -234,9 +335,7 @@ def load_bioqic_fem_box_data(data_root, verbose=True):
 
     # combine into a data set and transpose the dimensions
     data = xr.Dataset(dict(u=u, mu=mu, spatial_region=sr))
-    data = data.transpose('frequency', 'x', 'y', 'z', 'component')
-
-    return data
+    return data.transpose('frequency', 'x', 'y', 'z', 'component')
 
 
 def select_data_subset(

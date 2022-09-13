@@ -75,14 +75,28 @@ def laplacian(u):
     return xr.concat(components, dim=u.component).transpose(*u.dims)
 
 
-def helmholtz_inversion(u, Lu, rho=1000):
+def helmholtz_inversion(u, Lu, rho=1000, polar=False, eps=1e-8):
     '''
     Direct algebraic inversion
     of the Helmholtz equation.
     '''
     axes = tuple(range(1, u.ndim))
-    omega = np.expand_dims(u.frequency, axis=axes)
-    return (-rho * (2 * np.pi * omega)**2 * u / Lu).mean(axis=-1)
+    omega = 2 * np.pi * u.frequency
+    omega = np.expand_dims(omega, axis=axes)
+
+    if polar:
+
+        numer_abs_G = (rho * omega**2 * np.abs(u)).sum(axis=-1)
+        denom_abs_G = np.abs(Lu).sum(axis=-1)
+        abs_G = numer_abs_G / (denom_abs_G + eps)
+
+        numer_phi_G = (u.real * Lu.real + u.imag * Lu.imag).sum(axis=-1)
+        denom_phi_G = (np.abs(u) * np.abs(Lu)).sum(axis=-1)
+        phi_G = np.arccos(-numer_phi_G / (denom_phi_G + eps))
+
+        return abs_G * np.exp(1j * phi_G)
+    else:
+        return (-rho * omega**2 * u / (Lu + eps)).mean(axis=-1)
 
 
 @copy_metadata
