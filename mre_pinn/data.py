@@ -179,7 +179,8 @@ def preprocess_bioqic_phantom_data(
     truncate=3,
     threshold=100,
     order=1,
-    harmonic=1
+    harmonic=1,
+    verbose=True
 ):
     '''
     Args:
@@ -193,6 +194,9 @@ def preprocess_bioqic_phantom_data(
     Returns:
         The processed xarray dataset.
     '''
+    if verbose:
+        print('Preprocessing data')
+
     data = data.copy()
     resolution = data.field.spatial_resolution
 

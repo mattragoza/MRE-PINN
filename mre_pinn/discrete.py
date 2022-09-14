@@ -198,7 +198,7 @@ def savgol_smoothing(u, **kwargs):
         for component in range(u.shape[-1]):
             deriv_order = (0,) * ndim
             Ku[frequency,...,component] = scipy.ndimage.convolve(
-                u[frequency,...,component], kernels[deriv_order], mode='wrap'
+                u[frequency,...,component], kernels[deriv_order], mode='reflect'
             )
     return Ku
 
@@ -214,7 +214,7 @@ def savgol_jacobian(u, **kwargs):
             for i, deriv_order in enumerate(np.eye(ndim, dtype=int)):
                 deriv_order = tuple(deriv_order)
                 Ju[frequency,...,component,i] = scipy.ndimage.convolve(
-                    u[frequency,...,component], kernels[deriv_order], mode='wrap'
+                    u[frequency,...,component], kernels[deriv_order], mode='reflect'
                 ) / x_res[i]
     return Ju
 
@@ -229,6 +229,6 @@ def savgol_laplacian(u, **kwargs):
             for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
                 deriv_order = tuple(deriv_order)
                 Lu[frequency,...,component] += scipy.ndimage.convolve(
-                    u[frequency,...,component], kernels[deriv_order], mode='wrap'
+                    u[frequency,...,component], kernels[deriv_order], mode='reflect'
                 ) / x_res[i]**2
     return Lu
