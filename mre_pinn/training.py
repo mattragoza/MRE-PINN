@@ -17,7 +17,7 @@ class MREPINNModel(deepxde.Model):
     def predict(self, x):
 
         # compute model predictions
-        x = torch.as_tensor(x)
+        x = torch.as_tensor(x, dtype=torch.float32)
         x.requires_grad_(True)
         outputs = self.net(x)
         u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]

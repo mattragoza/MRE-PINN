@@ -85,8 +85,7 @@ class TestEvaluator(PeriodicCallback):
         u_true = data.u
         mu_true = data.mu
         Mu_base = data.Mu
-        x = data.field.points() #.astype(np.float32)
-        print(x.dtype)
+        x = data.field.points()
 
         # get model predictions
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
