@@ -1,9 +1,11 @@
-import sys, os, fire
+import sys, os
 import numpy as np
 
 import mre_pinn
+from mre_pinn.utils import main
 
 
+@main
 def solve(
 
     # data settings
@@ -50,7 +52,3 @@ def solve(
     test_eval = mre_pinn.testing.TestEvaluator(data, fem, save_prefix=save_prefix)
     test_eval.test(data, save_model=False)
     print(test_eval.metrics)
-
-
-if __name__ == '__main__':
-    fire.Fire(solve)
