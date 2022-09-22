@@ -58,9 +58,9 @@ def load_bioqic_dataset(
         data['u'] = add_complex_noise(data['u'], noise_ratio)
 
     if baseline: # direct Helmholtz inversion via discrete laplacian
-        data['Ku'] = discrete.savgol_smoothing(data['u'], order=2, kernel_size=3)
-        data['Lu'] = discrete.savgol_laplacian(data['u'], order=2, kernel_size=3)
-        data['Mu'] = discrete.helmholtz_inversion(data['u'], data['Lu'], polar=True)
+        data['Ku'] = discrete.savgol_smoothing(data['u'], order=3, kernel_size=5)
+        data['Lu'] = discrete.savgol_laplacian(data['u'], order=3, kernel_size=5)
+        data['Mu'] = discrete.helmholtz_inversion(data['Ku'], data['Lu'], polar=True)
 
     # test on 4x downsampled data
     if downsample:
@@ -74,7 +74,9 @@ def load_bioqic_dataset(
     return data, test_data
 
 
-def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=True):
+def load_bioqic_phantom_data(
+    data_root, which='unwrapped_dejittered', preprocess=True, verbose=True
+):
     '''
     Args:
         data_root: Path to directory with the files:
@@ -169,8 +171,10 @@ def load_bioqic_phantom_data(data_root, which='unwrapped_dejittered', verbose=Tr
     data = xr.Dataset(dict(a=a, u=u, mu=mu, spatial_region=sr))
     data = data.transpose('frequency', 't', 'x', 'y', 'z', 'component')
 
-    # preprocess the data
-    return preprocess_bioqic_phantom_data(data)
+    if preprocess:
+        return preprocess_bioqic_phantom_data(data)
+    else:
+        return data
 
 
 def preprocess_bioqic_phantom_data(

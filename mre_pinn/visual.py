@@ -22,7 +22,6 @@ class Viewer(object):
         self.fig.savefig(png_file, bbox_inches='tight')
 
 
-
 class XArrayViewer(Viewer):
 
     def __init__(
@@ -630,23 +629,23 @@ def elast_color_map(n_colors=255, symmetric=False):
     )
 
 
-def region_color_map(n_colors=255):
+def region_color_map(n_colors=255, has_background=False):
     '''
     Create a colormap for segmentation regions
     from white, red, yellow, green, to blue.
     '''
+    black  = (0, 0, 0)
     white  = (1, 1, 1)
-    gray   = (0.6, 0.6, 0.6)
     red    = (1, 0, 0)
     yellow = (1, 1, 0)
     green  = (0, 0.8, 0)
     blue   = (0, 0, 1)
     purple = (1, 0, 1)
 
-    if n_colors == 5:
-        colors = [white, red, yellow, green, blue]
+    if has_background:
+        colors = [black, white, red, yellow, green, blue]
     else:
-        colors = [white, gray, red, yellow, green, blue]
+        colors = [white, red, yellow, green, blue]
 
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='elast', colors=colors, N=n_colors
@@ -658,9 +657,13 @@ def get_color_kws(array, pct=95, scale=1.1):
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.
     '''
-    if array.name == {'sr', 'mask', 'region', 'spatial_region'}:
-        cmap = region_color_map(n_colors=5)
-        return dict(cmap=cmap, vmin=0, vmax=5)
+    if array.name in {'sr', 'mask', 'region', 'spatial_region'}:
+        if array.min() < 0:
+            cmap = region_color_map(n_colors=6, has_background=True)
+            return dict(cmap=cmap, vmin=-1.5, vmax=4.5)
+        else:
+            cmap = region_color_map(n_colors=5, has_background=False)
+            return dict(cmap=cmap, vmin=-0.5, vmax=4.5)
     elif array.name in {'a', 'A', 'anatomy', 'anatomic'}:
         cmap = grayscale_color_map()
         vmin = 0
