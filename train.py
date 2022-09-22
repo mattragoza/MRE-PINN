@@ -1,4 +1,4 @@
-import sys, os, fire
+import sys, os
 import numpy as np
 import torch
 
@@ -6,8 +6,10 @@ os.environ['DDEBACKEND'] = 'pytorch'
 import deepxde
 
 import mre_pinn
+from mre_pinn.utils import main
 
 
+@main
 def train(
 
     # data settings
@@ -109,7 +111,3 @@ def train(
 
     # final test evaluation
     test_eval.test(data)
-
-
-if __name__ == '__main__':
-    fire.Fire(train)

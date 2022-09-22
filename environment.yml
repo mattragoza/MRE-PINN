@@ -20,5 +20,4 @@ dependencies:
   - ipykernel
   - ipywidgets
   - tqdm
-  - fire
 
