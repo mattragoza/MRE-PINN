@@ -50,13 +50,19 @@ def train(
     )
 
     # convert to vector/scalar fields and coordinates
-    x  = data.u.field.points().astype(np.float32)
-    u  = data.u.field.values().astype(np.complex64)
-    mu = data.mu.field.values().astype(np.complex64)
+    #   while masking out the background region
+    region = data.spatial_region.field.values()[:,0]
+    print(f'Omitting {sum(region < 0)} background points')
+
+    x  = data.u.field.points().astype(np.float32)[region >= 0]
+    u  = data.u.field.values().astype(np.complex64)[region >= 0]
+    mu = data.mu.field.values().astype(np.complex64)[region >= 0]
+    print(region.shape, x.shape, u.shape, mu.shape)
 
     # initialize the PDE, geometry, and boundary conditions
     pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-    geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0) + 1e-5)
+    #geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0) + 1e-5)
+    geom = deepxde.geometry.PointCloud(points=x)
     bc = mre_pinn.fields.VectorFieldBC(points=x, values=u)
 
     # define model architecture
