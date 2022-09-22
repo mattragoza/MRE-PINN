@@ -46,12 +46,12 @@ def load_bioqic_dataset(
     # select data subset
     data, ndim = select_data_subset(data, frequency, xyz_slice, verbose=verbose)
 
+    # convert region to a coordinate label
+    if 'spatial_region' in data:
+        data = data.assign_coords(spatial_region=data.spatial_region)
+
     if verbose:
         print(data)
-
-    # convert region to a coordinate label
-    if 'spatial_region' in data.coords:
-        data = data.assign_coords(spatial_region=data.spatial_region)
 
     # add complex-valued noise to wave image
     if noise_ratio > 0:
