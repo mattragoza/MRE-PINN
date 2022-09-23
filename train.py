@@ -17,7 +17,7 @@ def train(
     data_name='fem_box',
     frequency=80,
     xyz_slice='2D',
-    noise_ratio=0,
+    noise_ratio=0.0,
 
     # pde settings
     pde_name='hetero',
@@ -29,13 +29,11 @@ def train(
     activ_fn='t',
 
     # training settings
+    optimizer='adam',
     learning_rate=1e-4,
     pde_loss_wt=1e-8,
-    data_loss_wt=1,
-    optimizer='adam',
-    batch_size=80,
-    pde_distrib='pseudo',
-    n_domain=48,
+    data_loss_wt=1e0,
+    batch_size=128,
     n_iters=100000,
 
     # testing settings
@@ -54,18 +52,14 @@ def train(
     # convert to vector/scalar fields and coordinates
     #   while masking out the background region
     region = data.spatial_region.field.values()[:,0]
-    print(f'Omitting {sum(region < 0)} background points')
-
-    x  = data.u.field.points().astype(np.float32)[region >= 0]
-    u  = data.u.field.values().astype(np.complex64)[region >= 0]
+    x = data.u.field.points().astype(np.float32)[region >= 0]
+    u = data.u.field.values().astype(np.complex64)[region >= 0]
     mu = data.mu.field.values().astype(np.complex64)[region >= 0]
-    print(region.shape, x.shape, u.shape, mu.shape)
 
     # initialize the PDE, geometry, and boundary conditions
+    geom = deepxde.geometry.PointCloud(x)
     pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-    #geom = deepxde.geometry.Hypercube(x.min(axis=0), x.max(axis=0) + 1e-5)
-    geom = deepxde.geometry.PointCloud(points=x)
-    bc = mre_pinn.fields.VectorFieldBC(points=x, values=u)
+    bc = mre_pinn.fields.VectorFieldBC(x, u, batch_size=(batch_size + 1)//2)
 
     # define model architecture
     net = mre_pinn.model.MREPINN(
@@ -82,14 +76,7 @@ def train(
     print(net)
 
     # compile model and configure training settings
-    model = mre_pinn.training.MREPINNModel(
-        net, pde, geom, bc,
-        batch_size=batch_size,
-        num_domain=n_domain,
-        num_boundary=0,
-        train_distribution=pde_distrib,
-        anchors=None
-    )
+    model = mre_pinn.training.MREPINNModel(geom, pde, bc, net, pde_name, batch_size)
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
@@ -110,4 +97,6 @@ def train(
     model.train(n_iters, display_every=10, callbacks=[test_eval, sampler])
 
     # final test evaluation
+    print('Final test evaluation')
     test_eval.test(data)
+    print(test_eval.metrics)

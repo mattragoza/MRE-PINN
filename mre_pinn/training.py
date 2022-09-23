@@ -8,9 +8,16 @@ from . import pde
 
 class MREPINNModel(deepxde.Model):
 
-    def __init__(self, net, pde, geom, bc, batch_size=None, **kwargs):
-        bc.set_batch_size(batch_size)
-        data = deepxde.data.PDE(geom, pde, bc, **kwargs)
+    def __init__(self, geom, pde, bc, net, batch_size):
+
+        # combine them into a deepxde PDE data set
+        data = deepxde.data.PDE(
+            geom, pde, bc,
+            train_distribution='pseudo',
+            num_domain=batch_size//2,
+            num_boundary=0,
+            anchors=None
+        )
         super().__init__(data, net)
 
     @minibatch
