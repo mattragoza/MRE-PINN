@@ -183,7 +183,8 @@ def main(func):
                     '--' + name, default=False, action='store_true'
                 )
             else: # optional argument
-                type_ = type_ or type(default)
+                if type_ is None and default is not None:
+                    type_ = type(default)
                 parser.add_argument(
                     '--' + name, default=default, type=type_, help=f'[{default}]'
                 )

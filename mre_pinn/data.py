@@ -65,8 +65,9 @@ def load_bioqic_dataset(
     # test on 4x downsampled data
     if downsample:
         downsample = {d: downsample for d in data.field.spatial_dims}
-        test_data = data.coarsen(**downsample).mean()
-        test_data['spatial_region'] = data.spatial_region.coarsen(**downsample).max()
+        test_data = data.coarsen(boundary='trim', **downsample).mean()
+        test_data['spatial_region'] = \
+            data.spatial_region.coarsen(boundary='trim', **downsample).max()
         test_data = test_data.assign_coords(spatial_region=test_data.spatial_region)
     else:
         test_data = data.copy()

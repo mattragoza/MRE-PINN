@@ -76,7 +76,7 @@ def train(
     print(net)
 
     # compile model and configure training settings
-    model = mre_pinn.training.MREPINNModel(geom, pde, bc, net, pde_name, batch_size)
+    model = mre_pinn.training.MREPINNModel(geom, pde, bc, net, batch_size)
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
