@@ -150,9 +150,10 @@ class TestEvaluator(PeriodicCallback):
         sources = ['model', 'residual', 'reference']
 
         metrics = []
-        for array in arrays:
+        for array in arrays: # wave field, laplacian, elastogram, baseline
             var_type = array.name
 
+            # model, residual, or reference
             for var_src, var_name in zip(sources, array['variable'].values):
                 a = array.sel(variable=var_name)
                 value = np.mean(np.abs(a)**2)
@@ -160,8 +161,8 @@ class TestEvaluator(PeriodicCallback):
                 metric = (index, 'mean_squared_abs_value', value)
                 metrics.append(metric)
 
-                ps = discrete.power_spectrum(a)
-                for f_bin, value in zip(ps.spatial_frequency_bins.values, ps.values):
+                psd = discrete.power_spectrum(a)
+                for f_bin, value in zip(psd.spatial_frequency_bins.values, ps.values):
                     index = (iter_, var_type, var_src, var_name, f_bin.right, 'all')
                     metric = (index, 'power_density', value)
                     metrics.append(metric)
@@ -169,7 +170,7 @@ class TestEvaluator(PeriodicCallback):
                 mav = np.abs(a.real).groupby('spatial_region').median(...)
                 for region, value in zip(mav.spatial_region.values, mav.values):
                     index = (iter_, var_type, var_src, var_name, 'all', region)
-                    metric = (index, 'mean_abs_value', value)
+                    metric = (index, 'median_abs_value', value)
                     metrics.append(metric)
 
         return metrics
