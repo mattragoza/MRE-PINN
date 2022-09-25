@@ -162,7 +162,7 @@ class TestEvaluator(PeriodicCallback):
                 metrics.append(metric)
 
                 psd = discrete.power_spectrum(a)
-                for f_bin, value in zip(psd.spatial_frequency_bins.values, ps.values):
+                for f_bin, value in zip(psd.spatial_frequency_bins.values, psd.values):
                     index = (iter_, var_type, var_src, var_name, f_bin.right, 'all')
                     metric = (index, 'power_density', value)
                     metrics.append(metric)
