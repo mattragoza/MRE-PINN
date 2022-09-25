@@ -1,4 +1,4 @@
-import time
+import os, time
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -42,8 +42,18 @@ class TestEvaluator(PeriodicCallback):
         ]
         self.metrics = pd.DataFrame(columns=index_cols)
         self.metrics.set_index(index_cols, inplace=True)
+
         self.save_prefix = save_prefix
         self.save_every = save_every
+
+        if save_prefix: # create output subdirectories
+            save_dir, save_name = os.path.split(save_prefix)
+            viewer_dir = os.path.join(save_dir, 'viewers')
+            weight_dir = os.path.join(save_dir, 'weights')
+            os.makedirs(viewer_dir, exist_ok=True)
+            os.makedirs(weight_dir, exist_ok=True)
+            self.viewer_prefix = os.path.join(viewer_dir, save_name)
+            self.weight_prefix = os.path.join(weight_dir, save_name)
 
         # estimate % of time spent testing
         self.t_start = time.time()
@@ -76,8 +86,8 @@ class TestEvaluator(PeriodicCallback):
             self.update_plots()
         if self.view:
             self.update_viewers()
-        if save_model and self.save_prefix: # save model state
-            self.model.save(self.save_prefix + '_model')
+        if save_model and self.weight_prefix: # save model state
+            self.model.save(self.weight_prefix + '_model')
 
     def compute_arrays(self, data):
 
@@ -177,7 +187,7 @@ class TestEvaluator(PeriodicCallback):
 
     def update_arrays(self, arrays, save=True):
         self.arrays = arrays
-        if self.save_prefix and save:
+        if save and self.save_prefix:
             for array in arrays:
                 array_name = array.name.lower().replace(' ', '_')
                 array = xr.concat([array.real, array.imag], dim='part')
@@ -186,7 +196,7 @@ class TestEvaluator(PeriodicCallback):
     def update_metrics(self, new_metrics, save=True):
         for index, name, value in new_metrics:
             self.metrics.loc[index, name] = value
-        if self.save_prefix and save:
+        if save and self.save_prefix:
             self.metrics.to_csv(self.save_prefix + '_train_metrics.csv', sep=' ')
 
     def update_plots(self, save=True):
@@ -215,13 +225,13 @@ class TestEvaluator(PeriodicCallback):
             self.region_plot = visual.DataViewer(
                 data[data.variable_type == 'elastogram'],
                 x='iteration',
-                y='mean_abs_value',
+                y='median_abs_value',
                 col='variable_source',
                 #row='variable_type',
                 hue='spatial_region',
                 palette='Greens_r'
             )
-        if self.save_prefix and save:
+        if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
             self.region_plot.to_png(self.save_prefix + '_train_regions.png')
@@ -245,8 +255,8 @@ class TestEvaluator(PeriodicCallback):
                     **kwargs
                 )
                 self.viewers.append(viewer)
-        if self.save_prefix and save:
+        if save and self.viewer_prefix:
             curr_iter = self.iteration
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
-                viewer.to_png(f'{self.save_prefix}_{array_name}_{curr_iter}.png')
+                viewer.to_png(f'{self.viewer_prefix}_{array_name}_{curr_iter}.png')
