@@ -671,7 +671,7 @@ def get_color_kws(array, pct=95, scale=1.1):
         return dict(cmap=cmap, vmin=vmin, vmax=vmax)
     elif array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline'}:
         cmap = wave_color_map(reverse=True)
-        vmax = 1e4
+        vmax = 2e4
     else:
         cmap = wave_color_map()
         vmax = np.percentile(np.abs(array), pct) * scale
