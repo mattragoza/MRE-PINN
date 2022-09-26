@@ -17,6 +17,9 @@ class PINNModel(deepxde.Model):
         u = data.u.field.values().astype(np.complex64)[region >= 0]
         mu = data.mu.field.values().astype(np.complex64)[region >= 0]
 
+        # initialize the network weights
+        net.init_weights(x, u, mu)
+
         # initialize the PDE, geometry, and boundary conditions
         geom = deepxde.geometry.PointCloud(x)
         bc = fields.VectorFieldBC(x, u, batch_size=(batch_size + 1)//2)

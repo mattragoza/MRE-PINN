@@ -51,7 +51,7 @@ def train(
     )
 
     # define model architecture
-    net = mre_pinn.model.PINN(
+    net = mre_pinn.pinn.PINN(
         n_input=data.field.n_spatial_dims + 1,
         n_outputs=[data.field.n_spatial_dims, 1],
         omega0=omega0,

@@ -5,7 +5,8 @@ import deepxde
 from . import (
 	data,
 	fields,
-	model,
+	pinn,
+	pino,
 	pde,
 	training,
 	testing,

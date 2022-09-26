@@ -20,7 +20,7 @@ def complex_uniform_(t, loc, scale):
     return t
 
 
-class PINN(torch.nn.Sequential):
+class PINN(torch.nn.Module):
     '''
     A physics-informed neural network for elasticity reconstruction.
     '''
@@ -36,7 +36,9 @@ class PINN(torch.nn.Sequential):
         dense=True,
         dtype=None
     ):
+        super().__init__()
         self.n_outputs = n_outputs
+        self.input_scaler = InputScaler(dtype)
 
         if parallel:
             net_outputs = [n for n in n_outputs]
@@ -46,36 +48,38 @@ class PINN(torch.nn.Sequential):
         self.idxs = [0] + list(np.cumsum(n_outputs))
 
         # construct the network
-        nets = [
+        self.nets = [
             FFNN(
                 n_input=n_input,
                 n_layers=n_layers,
                 n_hidden=n_hidden,
                 n_output=n_output * (2, 1)[dtype.is_complex],
                 activ_fn=activ_fn,
+                omega0=omega0,
                 dense=dense,
                 dtype=dtype
             ) for n_output in net_outputs
         ]
         if parallel:
-            net = Parallel(nets)
+            self.net = Parallel(self.nets)
         else:
-            net = nets[0]
+            self.net = self.nets[0]
 
-        if dtype.is_complex:
-            super().__init__(net)
-        else:
-            real_to_complex = RealToComplex()
-            super().__init__(net, real_to_complex)
-
-        # initialize weights
-        for n in nets:
-            if dtype.is_complex:
-                n.init_weights(omega0, c=6)
-            else:
-                n.init_weights(omega0, c=6)
-
+        self.output_scaler = OutputScaler(dtype)
         self.regularizer = None
+
+    def init_weights(self, input, *outputs):
+        self.input_scaler.init_weights(input)
+        self.output_scaler.init_weights(*outputs)
+        for net in self.nets:
+            net.init_weights(c=6)
+
+    def forward(self, x):
+        x = self.input_scaler(x)
+        x = self.net(x)
+        x = as_complex(x)
+        x = self.output_scaler(x)
+        return x
 
 
 class FFNN(torch.nn.ModuleList):
@@ -88,6 +92,7 @@ class FFNN(torch.nn.ModuleList):
         n_hidden: Number of hidden units.
         n_output: Number of output units.
         activ_fn: Activation function(s).
+        omega0: Input sine activation frequency.
         dense: If True, use dense connections.
     '''
     def __init__(
@@ -97,8 +102,7 @@ class FFNN(torch.nn.ModuleList):
         n_hidden,
         n_output,
         activ_fn,
-        input_fn=None,
-        output_fn=None,
+        omega0=None,
         dense=False,
         dtype=torch.float32
     ):
@@ -119,6 +123,7 @@ class FFNN(torch.nn.ModuleList):
             else:
                 n_input = n_hidden
 
+        self.omega0 = omega0
         self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
 
@@ -128,8 +133,8 @@ class FFNN(torch.nn.ModuleList):
         for i, linear in enumerate(self.linears):
 
             if i < len(self.linears) - 1: # hidden layer
-                if i == 0: # input layer
-                    output = torch.sin(linear(input))
+                if i == 0 and self.omega0: # input layer
+                    output = torch.sin(self.omega0 * linear(input))
                 else:
                     output = self.activ_fn(linear(input))
 
@@ -143,7 +148,7 @@ class FFNN(torch.nn.ModuleList):
 
         return output
 
-    def init_weights(self, omega0, c=6):
+    def init_weights(self, c=6):
         '''
         SIREN weight initialization.
         '''
@@ -151,7 +156,7 @@ class FFNN(torch.nn.ModuleList):
             n_input = module.weight.shape[-1]
 
             if i == 0: # first layer
-                w_std = omega0 / n_input
+                w_std = 1 / n_input
             else:
                 w_std = np.sqrt(c / n_input)
 
@@ -173,9 +178,12 @@ class Parallel(torch.nn.ModuleList):
 
 class InputScaler(torch.nn.Module):
 
-    def __init__(self, data, dtype):
+    def __init__(self, dtype):
         super().__init__()
-        data = torch.as_tensor(data, dtype=dtype)
+        self.dtype = dtype
+
+    def init_weights(self, data):
+        data = torch.as_tensor(data, dtype=self.dtype)
         self.loc = data.mean(dim=0, keepdim=True)
         self.scale = data.std(dim=0, keepdim=True)
 
@@ -188,17 +196,14 @@ class InputScaler(torch.nn.Module):
 
 class OutputScaler(torch.nn.Module):
 
-    def __init__(self, *data, dtype):
+    def __init__(self, dtype):
         super().__init__()
-        data = torch.cat([torch.as_tensor(d, dtype=dtype) for d in data], dim=1)
+        self.dtype = dtype
+
+    def init_weights(self, *data):
+        data = torch.cat([torch.as_tensor(d, dtype=self.dtype) for d in data], dim=1)
         self.loc = data.mean(dim=0, keepdim=True)
         self.scale = data.std(dim=0, keepdim=True)
 
     def forward(self, input):
         return input * self.scale + self.loc
-
-
-class RealToComplex(torch.nn.Module):
-
-    def forward(self, input):
-        return as_complex(input)

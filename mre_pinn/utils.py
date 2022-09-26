@@ -62,6 +62,8 @@ def as_complex(a, interleave=True):
     Returns:
         An (..., M) complex-valued array/tensor.
     '''
+    if a.dtype.is_complex:
+        return a
     if interleave:
         assert a.shape[-1] % 2 == 0
         return a[...,::2] + 1j * a[...,1::2]
