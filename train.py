@@ -41,6 +41,7 @@ def train(
     save_every=10000,
     save_prefix=None
 ):
+    # load the training data
     data, test_data = mre_pinn.data.load_bioqic_dataset(
         data_root=data_root,
         data_name=data_name,
@@ -49,22 +50,10 @@ def train(
         noise_ratio=noise_ratio
     )
 
-    # convert to vector/scalar fields and coordinates
-    #   while masking out the background region
-    region = data.spatial_region.field.values()[:,0]
-    x = data.u.field.points().astype(np.float32)[region >= 0]
-    u = data.u.field.values().astype(np.complex64)[region >= 0]
-    mu = data.mu.field.values().astype(np.complex64)[region >= 0]
-
-    # initialize the PDE, geometry, and boundary conditions
-    geom = deepxde.geometry.PointCloud(x)
-    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-    bc = mre_pinn.fields.VectorFieldBC(x, u, batch_size=(batch_size + 1)//2)
-
     # define model architecture
-    net = mre_pinn.model.MREPINN(
-        input=x,
-        outputs=[u, mu],
+    net = mre_pinn.model.PINN(
+        n_input=data.field.n_spatial_dims + 1,
+        n_outputs=[data.field.n_spatial_dims, 1],
         omega0=omega0,
         n_layers=n_layers,
         n_hidden=n_hidden,
@@ -75,13 +64,16 @@ def train(
     )
     print(net)
 
+    # define PDE that we want to solve
+    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
+
     # compile model and configure training settings
-    model = mre_pinn.training.MREPINNModel(geom, pde, bc, net, batch_size)
+    model = mre_pinn.training.PINNModel(data, net, pde, batch_size)
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
         loss_weights=[pde_loss_wt, data_loss_wt],
-        loss=mre_pinn.training.standardized_msae_loss_fn(u)
+        loss=mre_pinn.training.standardized_msae_loss_fn(data.u.values)
     )
     test_eval = mre_pinn.testing.TestEvaluator(
         data=test_data,

@@ -4,19 +4,9 @@ import torch
 from .utils import identity, as_iterable, as_complex
 
 
-def cis(x):
-    return torch.sin(x) + 1j * torch.cos(x)
-
-
-def gaussian(x):
-    return torch.exp(-x**2)
-
-
 def get_activ_fn(key):
     return {
         's': torch.sin,
-        'g': gaussian,
-        'i': cis,
         'r': torch.nn.functional.leaky_relu, 
         't': torch.tanh
     }[key]
@@ -30,14 +20,14 @@ def complex_uniform_(t, loc, scale):
     return t
 
 
-class MREPINN(torch.nn.Sequential):
+class PINN(torch.nn.Sequential):
     '''
     A physics-informed neural network for elasticity reconstruction.
     '''
     def __init__(
         self,
-        input,
-        outputs,
+        n_input,
+        n_outputs,
         omega0,
         n_layers,
         n_hidden,
@@ -46,12 +36,7 @@ class MREPINN(torch.nn.Sequential):
         dense=True,
         dtype=None
     ):
-        n_input = input.shape[1]
-        n_outputs = [o.shape[1] for o in outputs]
         self.n_outputs = n_outputs
-
-        input_scaler = InputScaler(input, dtype=dtype)
-        output_scaler = OutputScaler(*outputs, dtype=torch.complex64)
 
         if parallel:
             net_outputs = [n for n in n_outputs]
@@ -78,10 +63,10 @@ class MREPINN(torch.nn.Sequential):
             net = nets[0]
 
         if dtype.is_complex:
-            super().__init__(input_scaler, net, output_scaler)
+            super().__init__(net)
         else:
             real_to_complex = RealToComplex()
-            super().__init__(input_scaler, net, real_to_complex, output_scaler)
+            super().__init__(net, real_to_complex)
 
         # initialize weights
         for n in nets:
@@ -119,30 +104,22 @@ class FFNN(torch.nn.ModuleList):
     ):
         super().__init__()
 
-        activ_fn = [get_activ_fn(a) for a in as_iterable(activ_fn, string_ok=True)]
-        n_activ_fns = len(activ_fn)
-
         self.linears = []
         for i in range(n_layers):
 
             if i < n_layers - 1: # hidden layer
-                linear = []
-                for j in range(n_activ_fns):
-                    linear.append(torch.nn.Linear(n_input, n_hidden, dtype=dtype))
-                    self.add_module(f'linear{i}_{activ_fn[j].__name__}', linear[j])
-
+                linear = torch.nn.Linear(n_input, n_hidden, dtype=dtype)
             else: # output layer
                 linear = torch.nn.Linear(n_input, n_output, dtype=dtype)
-                self.add_module(f'linear{i}', linear)
-
             self.linears.append(linear)
+            self.add_module(f'linear{i}', linear)
 
             if dense:
                 n_input += n_hidden
             else:
                 n_input = n_hidden
 
-        self.activ_fn = activ_fn
+        self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
 
     def forward(self, input):
@@ -151,10 +128,10 @@ class FFNN(torch.nn.ModuleList):
         for i, linear in enumerate(self.linears):
 
             if i < len(self.linears) - 1: # hidden layer
-                output = 1
-                for j, linear in enumerate(linear):
-                    f = torch.sin if i == 0 else self.activ_fn[j]
-                    output *= f(linear(input))
+                if i == 0: # input layer
+                    output = torch.sin(linear(input))
+                else:
+                    output = self.activ_fn(linear(input))
 
                 if self.dense: # dense connections
                     input = torch.cat([input, output], dim=1)

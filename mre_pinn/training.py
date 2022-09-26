@@ -3,12 +3,23 @@ import torch
 import deepxde
 
 from .utils import minibatch
-from . import pde
+from . import pde, fields
 
 
-class MREPINNModel(deepxde.Model):
+class PINNModel(deepxde.Model):
 
-    def __init__(self, geom, pde, bc, net, batch_size):
+    def __init__(self, data, net, pde, batch_size):
+
+        # convert to vector/scalar fields and coordinates
+        #   while masking out the background region
+        region = data.spatial_region.field.values()[:,0]
+        x = data.u.field.points().astype(np.float32)[region >= 0]
+        u = data.u.field.values().astype(np.complex64)[region >= 0]
+        mu = data.mu.field.values().astype(np.complex64)[region >= 0]
+
+        # initialize the PDE, geometry, and boundary conditions
+        geom = deepxde.geometry.PointCloud(x)
+        bc = fields.VectorFieldBC(x, u, batch_size=(batch_size + 1)//2)
 
         # combine them into a deepxde PDE data set
         data = deepxde.data.PDE(
