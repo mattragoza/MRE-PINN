@@ -652,7 +652,7 @@ def region_color_map(n_colors=255, has_background=False):
     )
 
 
-def get_color_kws(array, pct=95, scale=1.1):
+def get_color_kws(array, pct=75, scale=1.1):
     '''
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.

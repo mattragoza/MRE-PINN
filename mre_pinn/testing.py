@@ -86,7 +86,7 @@ class TestEvaluator(PeriodicCallback):
             self.update_plots()
         if self.view:
             self.update_viewers()
-        if save_model and self.weight_prefix: # save model state
+        if save_model and self.save_prefix: # save model state
             self.model.save(self.weight_prefix + '_model')
 
     def compute_arrays(self, data):
@@ -255,7 +255,7 @@ class TestEvaluator(PeriodicCallback):
                     **kwargs
                 )
                 self.viewers.append(viewer)
-        if save and self.viewer_prefix:
+        if save and self.save_prefix:
             curr_iter = self.iteration
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
