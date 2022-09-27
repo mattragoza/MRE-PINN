@@ -65,10 +65,10 @@ def as_complex(a, interleave=True):
     if a.dtype.is_complex:
         return a
     if interleave:
-        assert a.shape[-1] % 2 == 0
+        assert a.shape[-1] % 2 == 0, a.shape
         return a[...,::2] + 1j * a[...,1::2]
     else:
-        assert a.shape[-1] == 2
+        assert a.shape[-1] == 2, a.shape
         return a[...,0] + 1j * a[...,1]
 
 

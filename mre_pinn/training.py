@@ -6,41 +6,66 @@ from .utils import minibatch
 from . import pde, fields
 
 
+class MREData(deepxde.data.Data):
+
+    def __init__(self, x, a, u, mu, pde, batch_size=None):
+
+        self.x = x     # spatial coordinates
+        self.a = a     # anatomic image
+        self.u = u     # wave image
+        self.mu = mu   # elastogram
+        self.pde = pde # physical constraint
+
+        self.batch_sampler = deepxde.data.BatchSampler(len(x), shuffle=True)
+        self.batch_size = batch_size
+
+    def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
+        (x, a), u_true = inputs, targets
+        u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
+        data_loss = loss_fn(u_true, u_pred)
+        pde_res = self.pde(x, outputs)
+        pde_loss = loss_fn(0, pde_res)
+        return [data_loss, pde_loss]
+
+    def train_next_batch(self, batch_size=None):
+        batch_size = batch_size or self.batch_size
+        if batch_size is None:
+            return (self.x, self.a), self.u
+        inds = self.batch_sampler.get_next(batch_size)
+        return (self.x[inds], self.a[inds]), self.u[inds]
+
+    def test(self):
+        return (self.x, self.a), self.u
+
+
 class PINNModel(deepxde.Model):
 
-    def __init__(self, data, net, pde, batch_size):
+    def __init__(self, data, net, pde, batch_size=None):
 
         # convert to vector/scalar fields and coordinates
         #   while masking out the background region
         region = data.spatial_region.field.values()[:,0]
         x = data.u.field.points().astype(np.float32)[region >= 0]
         u = data.u.field.values().astype(np.complex64)[region >= 0]
-        mu = data.mu.field.values().astype(np.complex64)[region >= 0]
+        a = data.a.field.values().astype(np.float32)[region >= 0]
+        mu = data.mu.field.values().astype(np.complex64)[region >= 0] 
+
+        # initialize the training data
+        data = MREData(x, a, u, mu, pde, batch_size)
 
         # initialize the network weights
         net.init_weights(x, u, mu)
 
-        # initialize the PDE, geometry, and boundary conditions
-        geom = deepxde.geometry.PointCloud(x)
-        bc = fields.VectorFieldBC(x, u, batch_size=(batch_size + 1)//2)
-
-        # combine them into a deepxde PDE data set
-        data = deepxde.data.PDE(
-            geom, pde, bc,
-            train_distribution='pseudo',
-            num_domain=batch_size//2,
-            num_boundary=0,
-            anchors=None
-        )
         super().__init__(data, net)
 
     @minibatch
-    def predict(self, x):
+    def predict(self, x, a):
 
         # compute model predictions
         x = torch.as_tensor(x, dtype=torch.float32)
+        a = torch.as_tensor(a, dtype=torch.float32)
         x.requires_grad_(True)
-        outputs = self.net(x)
+        outputs = self.net((x, a))
         u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
 
         # compute differential operators

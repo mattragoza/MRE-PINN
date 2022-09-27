@@ -95,11 +95,12 @@ class TestEvaluator(PeriodicCallback):
         u_true = data.u
         mu_true = data.mu
         Mu_base = data.Mu
-        x = data.field.points()
+        x = data.a.field.points()
+        a = data.a.field.values()
 
         # get model predictions
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
-            self.model.predict(x, batch_size=self.batch_size)
+            self.model.predict(x, a, batch_size=self.batch_size)
 
         # convert tensors to xarrays
         u_pred  = as_xarray(u_pred.reshape(u_true.shape), like=u_true)

@@ -20,21 +20,11 @@ def complex_uniform_(t, loc, scale):
     return t
 
 
-class PINN(torch.nn.Module):
-    '''
-    A physics-informed neural network for elasticity reconstruction.
-    '''
+class MultiNet(torch.nn.Module):
+    net_type = NotImplemented
+
     def __init__(
-        self,
-        n_input,
-        n_outputs,
-        omega0,
-        n_layers,
-        n_hidden,
-        activ_fn,
-        parallel=True,
-        dense=True,
-        dtype=None
+        self, n_input, n_outputs, parallel=True, dtype=None, **kwargs
     ):
         super().__init__()
         self.n_outputs = n_outputs
@@ -49,15 +39,11 @@ class PINN(torch.nn.Module):
 
         # construct the network
         self.nets = [
-            FFNN(
+            self.net_type(
                 n_input=n_input,
-                n_layers=n_layers,
-                n_hidden=n_hidden,
                 n_output=n_output * (2, 1)[dtype.is_complex],
-                activ_fn=activ_fn,
-                omega0=omega0,
-                dense=dense,
-                dtype=dtype
+                dtype=dtype,
+                **kwargs,
             ) for n_output in net_outputs
         ]
         if parallel:
@@ -72,17 +58,17 @@ class PINN(torch.nn.Module):
         self.input_scaler.init_weights(input)
         self.output_scaler.init_weights(*outputs)
         for net in self.nets:
-            net.init_weights(c=6)
+            net.init_weights()
 
-    def forward(self, x):
-        x = self.input_scaler(x)
-        x = self.net(x)
-        x = as_complex(x)
-        x = self.output_scaler(x)
-        return x
+    def forward(self, x_a):
+        x, a = x_a
+        h = self.input_scaler(x)
+        h = self.net(h)
+        h = as_complex(h)
+        return self.output_scaler(h)
 
 
-class FFNN(torch.nn.ModuleList):
+class PINN(torch.nn.ModuleList):
     '''
     A generic feedforward neural network.
 
@@ -165,6 +151,10 @@ class FFNN(torch.nn.ModuleList):
                     complex_uniform_(module.weight, 0, w_std)
                 else:
                     module.weight.uniform_(-w_std, w_std)
+
+
+class MultiPINN(MultiNet):
+    net_type = PINN
 
 
 class Parallel(torch.nn.ModuleList):

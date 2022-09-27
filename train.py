@@ -51,7 +51,7 @@ def train(
     )
 
     # define model architecture
-    net = mre_pinn.pinn.PINN(
+    net = mre_pinn.pinn.MultiPINN(
         n_input=data.field.n_spatial_dims + 1,
         n_outputs=[data.field.n_spatial_dims, 1],
         omega0=omega0,
@@ -83,10 +83,9 @@ def train(
         save_every=save_every,
         save_prefix=save_prefix
     )
-    sampler = mre_pinn.training.PDEResampler(period=1)
 
     # train the model
-    model.train(n_iters, display_every=10, callbacks=[test_eval, sampler])
+    model.train(n_iters, display_every=10, callbacks=[test_eval])
 
     # final test evaluation
     print('Final test evaluation')
