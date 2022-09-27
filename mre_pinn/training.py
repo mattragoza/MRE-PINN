@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial import distance
 import torch
 import deepxde
 
@@ -16,6 +17,9 @@ class MREData(deepxde.data.Data):
         self.mu = mu   # elastogram
         self.pde = pde # physical constraint
 
+        # compute pairwise distance between points
+        self.dist = distance.squareform(distance.pdist(x))
+
         self.batch_sampler = deepxde.data.BatchSampler(len(x), shuffle=True)
         self.batch_size = batch_size
 
@@ -29,10 +33,9 @@ class MREData(deepxde.data.Data):
 
     def train_next_batch(self, batch_size=None):
         batch_size = batch_size or self.batch_size
-        if batch_size is None:
-            return (self.x, self.a), self.u
-        inds = self.batch_sampler.get_next(batch_size)
-        return (self.x[inds], self.a[inds]), self.u[inds]
+        center_ind = self.batch_sampler.get_next(1)[0]
+        batch_inds = np.argsort(self.dist[center_ind])[:batch_size]
+        return (self.x[batch_inds], self.a[batch_inds]), self.u[batch_inds]
 
     def test(self):
         return (self.x, self.a), self.u
