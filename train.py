@@ -51,14 +51,13 @@ def train(
     )
 
     # define model architecture
-    net = mre_pinn.pinn.MultiPINN(
-        n_input=data.field.n_spatial_dims + 1,
+    net = mre_pinn.pinn.ParallelPINN(
+        n_inputs=[data.field.n_spatial_dims + 1, data.field.n_spatial_dims],
         n_outputs=[data.field.n_spatial_dims, 1],
         omega0=omega0,
         n_layers=n_layers,
         n_hidden=n_hidden,
         activ_fn=activ_fn,
-        parallel=True,
         dense=True,
         dtype=torch.float32
     )

@@ -48,16 +48,16 @@ class PINNModel(deepxde.Model):
         # convert to vector/scalar fields and coordinates
         #   while masking out the background region
         region = data.spatial_region.field.values()[:,0]
-        x = data.u.field.points().astype(np.float32)[region >= 0]
-        u = data.u.field.values().astype(np.complex64)[region >= 0]
+        x = data.field.points().astype(np.float32)[region >= 0]
         a = data.a.field.values().astype(np.float32)[region >= 0]
+        u = data.u.field.values().astype(np.complex64)[region >= 0]
         mu = data.mu.field.values().astype(np.complex64)[region >= 0] 
 
         # initialize the training data
         data = MREData(x, a, u, mu, pde, batch_size)
 
         # initialize the network weights
-        net.init_weights(x, u, mu)
+        net.init_weights(inputs=(x, a), outputs=(u, mu))
 
         super().__init__(data, net)
 

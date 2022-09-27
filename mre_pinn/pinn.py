@@ -1,71 +1,43 @@
 import numpy as np
 import torch
 
-from .utils import identity, as_iterable, as_complex
+from .utils import identity, is_iterable, as_iterable, as_complex, concat
 
 
 def get_activ_fn(key):
     return {
         's': torch.sin,
         'r': torch.nn.functional.leaky_relu, 
-        't': torch.tanh
+        't': torch.tanh,
+        'k': torch.nn.functional.tanhshrink,
     }[key]
 
 
-def complex_uniform_(t, loc, scale):
-    print('complex_uniform_')
-    radius = torch.rand(t.shape) * scale 
-    angle  = torch.rand(t.shape) * 2 * np.pi
-    t[...] = radius * torch.exp(1j * angle) + loc
-    return t
-
-
-class MultiNet(torch.nn.Module):
+class ParallelNet(torch.nn.Module):
+    '''
+    A set of parallel networks.
+    '''
     net_type = NotImplemented
 
-    def __init__(
-        self, n_input, n_outputs, parallel=True, dtype=None, **kwargs
-    ):
+    def __init__(self, n_outputs, **kwargs):
         super().__init__()
-        self.n_outputs = n_outputs
-        self.input_scaler = InputScaler(dtype)
 
-        if parallel:
-            net_outputs = [n for n in n_outputs]
-        else:
-            net_outputs = [sum(n_outputs)]
+        # construct parallel networks
+        self.nets = []
+        for i, n_output in enumerate(as_iterable(n_outputs)):
+            net = self.net_type(n_output=n_output, **kwargs)
+            self.nets.append(net)
+            self.add_module(f'net{i}', net)
 
-        self.idxs = [0] + list(np.cumsum(n_outputs))
-
-        # construct the network
-        self.nets = [
-            self.net_type(
-                n_input=n_input,
-                n_output=n_output * (2, 1)[dtype.is_complex],
-                dtype=dtype,
-                **kwargs,
-            ) for n_output in net_outputs
-        ]
-        if parallel:
-            self.net = Parallel(self.nets)
-        else:
-            self.net = self.nets[0]
-
-        self.output_scaler = OutputScaler(dtype)
         self.regularizer = None
 
-    def init_weights(self, input, *outputs):
-        self.input_scaler.init_weights(input)
-        self.output_scaler.init_weights(*outputs)
-        for net in self.nets:
-            net.init_weights()
+    def init_weights(self, inputs, outputs):
+        assert len(outputs) == len(self.nets)
+        for net, output in zip(self.nets, outputs):
+            net.init_weights(inputs, output)
 
-    def forward(self, x_a):
-        x, a = x_a
-        h = self.input_scaler(x)
-        h = self.net(h)
-        h = as_complex(h)
-        return self.output_scaler(h)
+    def forward(self, inputs):
+        return torch.cat([net(*inputs) for net in self.nets], dim=1)
 
 
 class PINN(torch.nn.ModuleList):
@@ -73,7 +45,7 @@ class PINN(torch.nn.ModuleList):
     A generic feedforward neural network.
 
     Args:
-        n_input: Number of input units.
+        n_inputs: Number of input units.
         n_layers: Number of linear layers.
         n_hidden: Number of hidden units.
         n_output: Number of output units.
@@ -83,7 +55,7 @@ class PINN(torch.nn.ModuleList):
     '''
     def __init__(
         self,
-        n_input,
+        n_inputs,
         n_layers,
         n_hidden,
         n_output,
@@ -93,7 +65,10 @@ class PINN(torch.nn.ModuleList):
         dtype=torch.float32
     ):
         super().__init__()
+        self.n_input = sum(as_iterable(n_inputs))
+        self.input_scaler = InputScaler(dtype)
 
+        n_input = self.n_input
         self.linears = []
         for i in range(n_layers):
 
@@ -109,20 +84,23 @@ class PINN(torch.nn.ModuleList):
             else:
                 n_input = n_hidden
 
+        self.n_output = n_output
+        self.output_scaler = OutputScaler(dtype)
+
         self.omega0 = omega0
         self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
 
-    def forward(self, input):
+    def forward(self, x, a):
+
+        input = torch.cat([x, a], dim=-1)
+        input = self.input_scaler(input)
 
         # forward pass through hidden layers
         for i, linear in enumerate(self.linears):
 
             if i < len(self.linears) - 1: # hidden layer
-                if i == 0 and self.omega0: # input layer
-                    output = torch.sin(self.omega0 * linear(input))
-                else:
-                    output = self.activ_fn(linear(input))
+                output = self.activ_fn(linear(input))
 
                 if self.dense: # dense connections
                     input = torch.cat([input, output], dim=1)
@@ -132,13 +110,20 @@ class PINN(torch.nn.ModuleList):
             else: # output layer
                 output = linear(input)
 
+        output = self.output_scaler(output)
         return output
 
-    def init_weights(self, c=6):
+    def init_weights(self, inputs, output, c=6):
         '''
         SIREN weight initialization.
         '''
+        input = concat(inputs, dim=-1)
+        self.input_scaler.init_weights(input)
+        self.output_scaler.init_weights(output)
+
         for i, module in enumerate(self.children()):
+            if not hasattr(module, 'weight'):
+                continue
             n_input = module.weight.shape[-1]
 
             if i == 0: # first layer
@@ -153,17 +138,8 @@ class PINN(torch.nn.ModuleList):
                     module.weight.uniform_(-w_std, w_std)
 
 
-class MultiPINN(MultiNet):
+class ParallelPINN(ParallelNet):
     net_type = PINN
-
-
-class Parallel(torch.nn.ModuleList):
-    '''
-    A parallel container. Applies the forward pass of each child module
-    to the input and then concatenates their output along the second dim.
-    '''
-    def forward(self, input):
-        return torch.cat([module(input) for module in self], dim=1)
 
 
 class InputScaler(torch.nn.Module):
@@ -190,8 +166,8 @@ class OutputScaler(torch.nn.Module):
         super().__init__()
         self.dtype = dtype
 
-    def init_weights(self, *data):
-        data = torch.cat([torch.as_tensor(d, dtype=self.dtype) for d in data], dim=1)
+    def init_weights(self, data):
+        data = torch.as_tensor(data, dtype=self.dtype)
         self.loc = data.mean(dim=0, keepdim=True)
         self.scale = data.std(dim=0, keepdim=True)
 
