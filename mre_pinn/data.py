@@ -345,7 +345,7 @@ def load_bioqic_fem_box_data(data_root, verbose=True):
     sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
 
     # combine into a data set and transpose the dimensions
-    data = xr.Dataset(dict(u=u, mu=mu, spatial_region=sr))
+    data = xr.Dataset(dict(a=0*u.real, u=u, mu=mu, spatial_region=sr))
     return data.transpose('frequency', 'x', 'y', 'z', 'component')
 
 
