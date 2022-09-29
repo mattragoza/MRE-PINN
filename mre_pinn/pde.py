@@ -173,33 +173,36 @@ class WaveEquation(object):
 
         return self.rho * omega**2 * u
 
-    def traction_and_body_forces(self, x, outputs):
+    def traction_and_body_forces(self, x, u, mu):
         '''
         Compute the traction and body forces.
 
         Args:
-            x: (N x 4) input tensor of omega,x,y,z
-            outputs: (N x 4) tensor of ux,uy,uz,mu
+            x: (N x D + 1) input tensor of frequency
+                and spatial coordinates
+            u: (N x D) tensor of displacement vectors
+            mu: (N x 1) tensor of shear modulus
         Returns:
-            2 (N x 3) tensors containing the traction and
+            2 (N x D) tensors containing the traction and
                 body forces for each displacement component
         '''
-        u, mu = outputs[:,:-1], outputs[:,-1:]
         omega = 2 * np.pi * x[:,:1] # radians
         f_trac = self.traction_forces(x, u, mu)
         f_body = self.body_forces(omega, u)
         return f_trac, f_body
 
-    def __call__(self, x, outputs):
+    def __call__(self, x, u, mu):
         '''
         Compute the PDE residuals.
 
         Args:
-            x: (N x 4) input tensor of omega,x,y,z
-            outputs: (N x 4) tensor of ux,uy,uz,mu
+            x: (N x D + 1) input tensor of frequency
+                and spatial coordinates
+            u: (N x D) tensor of displacement vectors
+            mu: (N x 1) tensor of shear modulus
         Returns:
-            (N x 3) tensor of PDE residual for each
-                ux,uy,uz displacement component
+            (N x D) tensor of PDE residual for each
+                displacement component
         '''
-        f_trac, f_body = self.traction_and_body_forces(x, outputs)
+        f_trac, f_body = self.traction_and_body_forces(x, u, mu)
         return f_trac + f_body

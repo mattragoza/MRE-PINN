@@ -68,9 +68,10 @@ class PINN(torch.nn.ModuleList):
         self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
 
-    def forward(self, x, a):
+    def forward(self, inputs):
 
-        input = torch.cat([x, a], dim=-1)
+        # TODO make conditional an optional arg
+        input = torch.cat(inputs, dim=-1)
         input = self.input_scaler(input)
 
         # forward pass through hidden layers
@@ -143,7 +144,7 @@ class ParallelNet(torch.nn.Module):
             net.init_weights(inputs, output)
 
     def forward(self, inputs):
-        return torch.cat([net(*inputs) for net in self.nets], dim=1)
+        return tuple(net(inputs) for net in self.nets)
 
 
 class ParallelPINN(ParallelNet):

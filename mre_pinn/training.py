@@ -25,23 +25,34 @@ class MREData(deepxde.data.Data):
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         (x, a), u_true = inputs, targets
-        u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
+        u_pred, mu_pred = outputs
         data_loss = loss_fn(u_true, u_pred)
-        pde_res = self.pde(x, outputs)
+        pde_res = self.pde(x, u_pred, mu_pred)
         pde_loss = loss_fn(0, pde_res)
         return [data_loss, pde_loss]
 
     def train_next_batch(self, batch_size=None):
+        '''
+        Args:
+            batch_size
+        Returns:
+            inputs: A tuple of input arrays.
+            targets: The target output array.
+        '''
         batch_size = batch_size or self.batch_size
         if False: # patch sampling
             center_ind = self.batch_sampler.get_next(1)[0]
             batch_inds = np.argsort(self.dist[center_ind])[:batch_size]
         else:
             batch_inds = self.batch_sampler.get_next(batch_size)
-        return (self.x[batch_inds], self.a[batch_inds]), self.u[batch_inds]
+        inputs = (self.x[batch_inds], self.a[batch_inds])
+        targets = self.u[batch_inds]
+        return inputs, targets
 
     def test(self):
-        return (self.x, self.a), self.u
+        inputs = (self.x, self.a)
+        targets = self.u
+        return inputs, targets
 
 
 class PINNModel(deepxde.Model):
@@ -71,12 +82,11 @@ class PINNModel(deepxde.Model):
         x = torch.as_tensor(x, dtype=torch.float32)
         a = torch.as_tensor(a, dtype=torch.float32)
         x.requires_grad_(True)
-        outputs = self.net((x, a))
-        u_pred, mu_pred = outputs[:,:-1], outputs[:,-1:]
+        u_pred, mu_pred = self.net((x, a))
 
         # compute differential operators
         lu_pred = pde.laplacian(u_pred, x, dim=1)
-        f_trac, f_body = self.data.pde.traction_and_body_forces(x, outputs)
+        f_trac, f_body = self.data.pde.traction_and_body_forces(x, u_pred, mu_pred)
         deepxde.gradients.clear()
 
         return u_pred, lu_pred, mu_pred, f_trac, f_body
