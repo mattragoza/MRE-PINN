@@ -33,8 +33,11 @@ class MREData(deepxde.data.Data):
 
     def train_next_batch(self, batch_size=None):
         batch_size = batch_size or self.batch_size
-        center_ind = self.batch_sampler.get_next(1)[0]
-        batch_inds = np.argsort(self.dist[center_ind])[:batch_size]
+        if False: # patch sampling
+            center_ind = self.batch_sampler.get_next(1)[0]
+            batch_inds = np.argsort(self.dist[center_ind])[:batch_size]
+        else:
+            batch_inds = self.batch_sampler.get_next(batch_size)
         return (self.x[batch_inds], self.a[batch_inds]), self.u[batch_inds]
 
     def test(self):

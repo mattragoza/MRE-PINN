@@ -248,7 +248,7 @@ class TestEvaluator(PeriodicCallback):
                 kwargs = visual.get_color_kws(array)
                 viewer = visual.XArrayViewer(
                     array,
-                    row='domain',
+                    row='part',
                     col='variable',
                     y='y' if 'y' in self.data.field.spatial_dims else None,
                     ax_width=2,

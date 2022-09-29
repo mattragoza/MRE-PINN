@@ -1,7 +1,9 @@
 import numpy as np
 import torch
 
-from .utils import identity, is_iterable, as_iterable, as_complex, concat
+from .utils import (
+    identity, is_iterable, as_iterable, as_complex, as_real, concat, exists
+)
 
 
 def get_activ_fn(key):
@@ -13,36 +15,9 @@ def get_activ_fn(key):
     }[key]
 
 
-class ParallelNet(torch.nn.Module):
-    '''
-    A set of parallel networks.
-    '''
-    net_type = NotImplemented
-
-    def __init__(self, n_outputs, **kwargs):
-        super().__init__()
-
-        # construct parallel networks
-        self.nets = []
-        for i, n_output in enumerate(as_iterable(n_outputs)):
-            net = self.net_type(n_output=n_output, **kwargs)
-            self.nets.append(net)
-            self.add_module(f'net{i}', net)
-
-        self.regularizer = None
-
-    def init_weights(self, inputs, outputs):
-        assert len(outputs) == len(self.nets)
-        for net, output in zip(self.nets, outputs):
-            net.init_weights(inputs, output)
-
-    def forward(self, inputs):
-        return torch.cat([net(*inputs) for net in self.nets], dim=1)
-
-
 class PINN(torch.nn.ModuleList):
     '''
-    A generic feedforward neural network.
+    Physics-informed neural network.
 
     Args:
         n_inputs: Number of input units.
@@ -75,7 +50,7 @@ class PINN(torch.nn.ModuleList):
             if i < n_layers - 1: # hidden layer
                 linear = torch.nn.Linear(n_input, n_hidden, dtype=dtype)
             else: # output layer
-                linear = torch.nn.Linear(n_input, n_output, dtype=dtype)
+                linear = torch.nn.Linear(n_input, n_output * 2, dtype=dtype)
             self.linears.append(linear)
             self.add_module(f'linear{i}', linear)
 
@@ -87,7 +62,9 @@ class PINN(torch.nn.ModuleList):
         self.n_output = n_output
         self.output_scaler = OutputScaler(dtype)
 
-        self.omega0 = omega0
+        self.omega0 = torch.nn.Parameter(
+            torch.as_tensor(omega0, dtype=dtype)
+        )
         self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
 
@@ -100,7 +77,11 @@ class PINN(torch.nn.ModuleList):
         for i, linear in enumerate(self.linears):
 
             if i < len(self.linears) - 1: # hidden layer
-                output = self.activ_fn(linear(input))
+
+                if i == 0 and exists(self.omega0): # sine input layer
+                    output = torch.sin(self.omega0 * linear(input))
+                else:
+                    output = self.activ_fn(linear(input))
 
                 if self.dense: # dense connections
                     input = torch.cat([input, output], dim=1)
@@ -108,7 +89,7 @@ class PINN(torch.nn.ModuleList):
                     input = output
 
             else: # output layer
-                output = linear(input)
+                output = as_complex(linear(input))
 
         output = self.output_scaler(output)
         return output
@@ -138,13 +119,40 @@ class PINN(torch.nn.ModuleList):
                     module.weight.uniform_(-w_std, w_std)
 
 
+class ParallelNet(torch.nn.Module):
+    '''
+    A set of parallel networks.
+    '''
+    net_type = NotImplemented
+
+    def __init__(self, n_outputs, **kwargs):
+        super().__init__()
+
+        # construct parallel networks
+        self.nets = []
+        for i, n_output in enumerate(as_iterable(n_outputs)):
+            net = self.net_type(n_output=n_output, **kwargs)
+            self.nets.append(net)
+            self.add_module(f'net{i}', net)
+
+        self.regularizer = None
+
+    def init_weights(self, inputs, outputs):
+        assert len(outputs) == len(self.nets)
+        for net, output in zip(self.nets, outputs):
+            net.init_weights(inputs, output)
+
+    def forward(self, inputs):
+        return torch.cat([net(*inputs) for net in self.nets], dim=1)
+
+
 class ParallelPINN(ParallelNet):
     net_type = PINN
 
 
 class InputScaler(torch.nn.Module):
 
-    def __init__(self, dtype):
+    def __init__(self, dtype=None):
         super().__init__()
         self.dtype = dtype
 
@@ -162,7 +170,7 @@ class InputScaler(torch.nn.Module):
 
 class OutputScaler(torch.nn.Module):
 
-    def __init__(self, dtype):
+    def __init__(self, dtype=None):
         super().__init__()
         self.dtype = dtype
 

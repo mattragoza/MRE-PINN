@@ -51,7 +51,7 @@ def as_matrix(a):
         return a.reshape(1, 1)
 
 
-def as_complex(a, interleave=True):
+def as_complex(a, interleave=True, polar=False):
     '''
     Combine the even and odd indices of a real
     array or tensor into the real and imaginary
@@ -66,13 +66,19 @@ def as_complex(a, interleave=True):
         return a
     if interleave:
         assert a.shape[-1] % 2 == 0, a.shape
-        return a[...,::2] + 1j * a[...,1::2]
+        if polar:
+            return a[...,0::2] * torch.exp(1j * a[...,1::2])
+        else:
+            return a[...,0::2] + 1j * a[...,1::2]
     else:
         assert a.shape[-1] == 2, a.shape
-        return a[...,0] + 1j * a[...,1]
+        if polar:
+            return a[...,0] * torch.exp(1j * a[...,1])
+        else:
+            return a[...,0] + 1j * a[...,1]
 
 
-def as_real(a, interleave=True):
+def as_real(a, interleave=True, polar=False):
     '''
     Interleave the real and imaginary parts of a
     complex array or tensor into the even and odd
@@ -83,15 +89,23 @@ def as_real(a, interleave=True):
     Returns:
         An (N, 2M) real-valued array/tensor.
     '''
+    if not a.dtype.is_complex:
+        return a
     if isinstance(a, torch.Tensor):
-        a = torch.stack([a.real, a.imag], dim=-1)
-    else:
-        a = np.stack([a.real, a.imag], axis=-1)
+        if polar:
+            a = torch.stack([torch.abs(a), torch.angle(a)], dim=-1)
+        else:
+            a = torch.stack([a.real, a.imag], dim=-1)
+    else: # numpy array
+        if polar:
+            a = np.stack([np.abs(a), np.angle(a)], axis=-1)
+        else:
+            a = np.stack([a.real, a.imag], axis=-1)
 
     if interleave and a.ndim > 1:
         return a.reshape(*a.shape[:-2], -1)
-
-    return a
+    else:
+        return a
 
 
 def as_xarray(a, like, suffix=None):
