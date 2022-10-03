@@ -27,6 +27,8 @@ class PINN(torch.nn.ModuleList):
         activ_fn: Activation function(s).
         omega0: Input sine activation frequency.
         dense: If True, use dense connections.
+        polar: If True, use polar model output.
+        conditional: If True, use anatomic image.
     '''
     def __init__(
         self,
@@ -37,19 +39,24 @@ class PINN(torch.nn.ModuleList):
         activ_fn,
         omega0=None,
         dense=False,
+        polar=False,
+        conditional=False,
         dtype=torch.float32
     ):
         super().__init__()
-        self.n_input = sum(as_iterable(n_inputs))
+        if conditional:
+            n_input = sum(as_iterable(n_inputs))
+        else:
+            n_input = as_iterable(n_inputs)[0]
+        self.n_input = n_input
         self.input_scaler = InputScaler(dtype)
 
-        n_input = self.n_input
         self.linears = []
         for i in range(n_layers):
 
             if i < n_layers - 1: # hidden layer
                 linear = torch.nn.Linear(n_input, n_hidden, dtype=dtype)
-            else: # output layer
+            else: # output layer (complex-valued)
                 linear = torch.nn.Linear(n_input, n_output * 2, dtype=dtype)
             self.linears.append(linear)
             self.add_module(f'linear{i}', linear)
@@ -67,11 +74,15 @@ class PINN(torch.nn.ModuleList):
         )
         self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
+        self.polar = polar
+        self.conditional = conditional
 
     def forward(self, inputs):
 
-        # TODO make conditional an optional arg
-        input = torch.cat(inputs, dim=-1)
+        if self.conditional:
+            input = torch.cat(inputs, dim=-1)
+        else:
+            input = inputs[0]
         input = self.input_scaler(input)
 
         # forward pass through hidden layers
@@ -90,7 +101,7 @@ class PINN(torch.nn.ModuleList):
                     input = output
 
             else: # output layer
-                output = as_complex(linear(input))
+                output = as_complex(linear(input), polar=self.polar)
 
         output = self.output_scaler(output)
         return output
@@ -99,7 +110,10 @@ class PINN(torch.nn.ModuleList):
         '''
         SIREN weight initialization.
         '''
-        input = concat(inputs, dim=-1)
+        if self.conditional:
+            input = concat(inputs, dim=-1)
+        else:
+            input = inputs[0]
         self.input_scaler.init_weights(input)
         self.output_scaler.init_weights(output)
 

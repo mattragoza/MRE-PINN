@@ -27,6 +27,8 @@ def train(
     n_layers=5,
     n_hidden=128,
     activ_fn='t',
+    polar=False,
+    conditional=False,
 
     # training settings
     optimizer='adam',
@@ -59,6 +61,8 @@ def train(
         n_hidden=n_hidden,
         activ_fn=activ_fn,
         dense=True,
+        polar=polar,
+        conditional=conditional,
         dtype=torch.float32
     )
     print(net)

@@ -194,7 +194,7 @@ def main(func):
             if default is undefined: # positional argument
                 parser.add_argument(name, type=type_)
 
-            elif default is False and type_ in {bool, None}: # flag
+            elif False and default is False and type_ in {bool, None}: # flag
                 parser.add_argument(
                     '--' + name, default=False, action='store_true'
                 )
