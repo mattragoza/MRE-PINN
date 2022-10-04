@@ -16,6 +16,8 @@ dependencies:
   - petsc=*=complex*
   - netCDF4
   - SimpleITK
+  - medpy
+  - torchvision
   - matplotlib
   - seaborn
   - notebook

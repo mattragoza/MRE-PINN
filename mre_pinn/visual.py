@@ -205,7 +205,10 @@ class XArrayViewer(Viewer):
         for i in range(n_rows):
             for j in range(n_cols):
                 index, row_label, col_label = self.get_index_and_labels(i, j)
+                x0 = self.coords[x_dim][0]
+                y0 = self.coords[y_dim][0]
                 x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
+                y_res = self.coords[y_dim][1] - self.coords[y_dim][0]
                 if do_line_plot:
                     lines = plot_line_1d(
                         self.axes[i,j],
@@ -224,7 +227,8 @@ class XArrayViewer(Viewer):
                     image = plot_image_2d(
                         self.axes[i,j],
                         self.array[index],
-                        resolution=x_res,
+                        origin=[x0, y0],
+                        resolution=[x_res, y_res],
                         xlabel=x_dim,
                         ylabel=row_label + y_dim,
                         title=col_label,
@@ -792,9 +796,13 @@ def imshow(ax, a, resolution=1, **kwargs):
     return ax.imshow(a_T, origin='lower', extent=extent, **kwargs)
 
 
-def plot_image_2d(ax, a, resolution, xlabel=None, ylabel=None, title=None, **kwargs):
+def plot_image_2d(
+    ax, a, origin, resolution, xlabel=None, ylabel=None, title=None, **kwargs
+):
     n_x, n_y = a.shape
-    extent = (0, n_x * resolution, 0, n_y * resolution)
+    x0, y0 = origin
+    x_res, y_res = resolution
+    extent = (x0, x0 + n_x * x_res, y0, y0 + n_y * y_res)
     ax.autoscale(enable=True, tight=True)
     if 'vmax' in kwargs and 'vmin' not in kwargs:
         kwargs['vmin'] = -kwargs['vmax']
