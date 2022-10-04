@@ -14,6 +14,8 @@ dependencies:
   - deepxde
   - fenics-dolfinx
   - petsc=*=complex*
+  - netCDF4
+  - SimpleITK
   - matplotlib
   - seaborn
   - notebook
