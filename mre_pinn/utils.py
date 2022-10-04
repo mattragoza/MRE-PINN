@@ -170,6 +170,19 @@ def minibatch(method):
     return wrapper
 
 
+def as_bool(s):
+    if isinstance(s, str):
+        s = s.lower()
+        if s in {'true', 't', '1'}:
+            return True
+        elif s in {'false', 'f', '0'}:
+            return False
+        else:
+            raise ValueError(f'{repr(s)} is not a valid bool string')
+    else:
+        return bool(s)
+
+
 def main(func):
     import sys, inspect, argparse
 
@@ -190,13 +203,13 @@ def main(func):
         parser = argparse.ArgumentParser()
         for name, default in zip(argspec.args, defaults):
             type_ = argspec.annotations.get(name, None)
-            
+
             if default is undefined: # positional argument
                 parser.add_argument(name, type=type_)
 
-            elif False and default is False and type_ in {bool, None}: # flag
+            elif default is False and type_ in {bool, None}: # flag
                 parser.add_argument(
-                    '--' + name, default=False, action='store_true'
+                    '--' + name, default=False, type=as_bool, help=f'[{default}]'
                 )
             else: # optional argument
                 if type_ is None and default is not None:
