@@ -11,13 +11,11 @@ dependencies:
   - xarray
   - cudatoolkit=11.3
   - pytorch::pytorch<1.12
+  - torchvision
   - deepxde
   - fenics-dolfinx
   - petsc=*=complex*
   - netCDF4
-  - SimpleITK
-  - medpy
-  - torchvision
   - matplotlib
   - seaborn
   - notebook

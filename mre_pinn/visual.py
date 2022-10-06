@@ -43,8 +43,12 @@ class XArrayViewer(Viewer):
         print_if(verbose, self.index_dims, self.value_dims)
         print_if(verbose, self.value_dim_map)
 
+        default_kws = get_color_kws(xarray)
+        default_kws['ax_height'] = 4
+        default_kws.update(**kwargs)
+
         self.set_array_internals(xarray)
-        self.initialize_subplots(**kwargs)
+        self.initialize_subplots(**default_kws)
 
     def preprocess_array(self, xarray, polar=False):
         '''
@@ -568,7 +572,7 @@ class Player(FuncAnimation):
         self.slider.set_val(i)
 
 
-def grayscale_color_map(n_colors=255, reverse=False):
+def grayscale_color_map(n_colors=255, reverse=False, symmetric=False):
     '''
     Create a colormap for MRI magnitude images
     from black to white.
@@ -576,10 +580,14 @@ def grayscale_color_map(n_colors=255, reverse=False):
     black = (0, 0, 0)
     white = (1, 1, 1)
 
-    colors = [black, white]
-
-    if reverse:
-        colors = colors[::-1]
+    if symmetric and reverse:
+        colors = [black, white, black]
+    elif symmetric:
+        colors = [white, black, white]
+    elif reverse:
+        colors = [white, black]
+    else:
+        colors = [black, white]
 
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='magnitude', colors=colors, N=n_colors
@@ -656,26 +664,32 @@ def region_color_map(n_colors=255, has_background=False):
     )
 
 
-def get_color_kws(array, pct=75, scale=1.1):
+def get_color_kws(array, pct=99, scale=1.1):
     '''
     Get a dictionary of colormap arguments
     for visualizing the provided xarray.
     '''
-    if array.name in {'sr', 'mask', 'region', 'spatial_region'}:
+    if array.name in {'sr', 'region', 'spatial_region'}:
         if array.min() < 0:
             cmap = region_color_map(n_colors=6, has_background=True)
             return dict(cmap=cmap, vmin=-1.5, vmax=4.5)
         else:
             cmap = region_color_map(n_colors=5, has_background=False)
             return dict(cmap=cmap, vmin=-0.5, vmax=4.5)
-    elif array.name in {'a', 'A', 'anatomy', 'anatomic'}:
+    elif array.name in {'a', 'A', 'anatomy', 'anatomic', 'mre_raw', 'dwi'} or array.name.startswith('t1') or array.name.startswith('t2'):
         cmap = grayscale_color_map()
         vmin = 0
         vmax = np.percentile(np.abs(array), pct) * scale
         return dict(cmap=cmap, vmin=vmin, vmax=vmax)
-    elif array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline'}:
+    elif array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline', 'mre'}:
         cmap = wave_color_map(reverse=True)
-        vmax = 2e4
+        vmax = np.percentile(np.abs(array), pct) * scale #2e4
+    elif array.name == 'compare':
+        cmap = grayscale_color_map(symmetric=True)
+        vmax = np.percentile(np.abs(array), pct) * scale #2e4
+    elif array.name == 'mask':
+        cmap = wave_color_map()
+        return dict(cmap=cmap, vmin=0, vmax=1)
     else:
         cmap = wave_color_map()
         vmax = np.percentile(np.abs(array), pct) * scale

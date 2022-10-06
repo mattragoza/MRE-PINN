@@ -1,11 +1,294 @@
-import sys, pathlib
+import sys, os, pathlib, functools
 import numpy as np
+import pandas as pd
 import xarray as xr
 import scipy.io
 import scipy.ndimage
+import skimage
+import SimpleITK as sitk
 
 from .utils import print_if, as_xarray
+from .visual import XArrayViewer
 from . import discrete
+
+
+class MREPatient(object):
+    
+    def __init__(
+        self,
+        data_root='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
+        patient_id='001',
+        sequences=['t1_pre_water', 't1_pre_fat', 'mre_raw', 'wave', 'mre'],
+        verbose=True
+    ):
+        self.data_root = data_root
+        self.patient_id = patient_id
+        self.sequences = sequences
+        self.verbose = verbose
+
+    @property
+    def metadata(self):
+        index_cols = ['sequence', 'dimension']
+        df = pd.DataFrame(columns=index_cols).set_index(index_cols)
+        for seq, image in self.images.items():
+            size = image.GetSize()
+            origin = image.GetOrigin()
+            spacing = image.GetSpacing()
+            for dim in range(image.GetDimension()):
+                df.loc[(seq, dim), 'size'] = image.GetSize()[dim]
+                df.loc[(seq, dim), 'spacing'] = image.GetSpacing()[dim]
+                df.loc[(seq, dim), 'origin'] = image.GetOrigin()[dim]
+        df['size'] = df['size'].astype(int)
+        df['limit'] = df['origin'] + (df['size'] - 1) * df['spacing']
+        df['center'] = df['origin'] + (df['size'] - 1) / 2 * df['spacing']
+        df['extent'] = df['limit'] - df['origin'] + df['spacing']
+        return df
+
+    def describe(self):
+        index_cols = ['sequence']
+        df = pd.DataFrame(columns=index_cols).set_index(index_cols)
+        for seq, image in self.images.items():
+            array = sitk.GetArrayViewFromImage(image)
+            df.loc[seq, 'dtype'] = array.dtype
+            df.loc[seq, 'count'] = array.size
+            df.loc[seq, 'mean'] = array.mean()
+            df.loc[seq, 'std'] = array.std()
+            df.loc[seq, 'min'] = array.min()
+            df.loc[seq, '25%'] = np.percentile(array, 25)
+            df.loc[seq, '50%'] = np.percentile(array, 50)
+            df.loc[seq, '75%'] = np.percentile(array, 75)
+            df.loc[seq, 'max'] = array.max()
+        df['count'] = df['count'].astype(int)
+        return df
+
+    def load_images(self):
+        self.images = {}
+        for seq in self.sequences:
+            nii_file = os.path.join(self.data_root, self.patient_id, seq + '.nii')
+            image = load_nifti_file(nii_file, self.verbose)
+            image.SetMetaData('name', seq)
+            self.images[seq] = image
+
+    def preprocess_images(self, register=True, segment=True):
+        self.correct_metadata()
+        self.restore_wave_image()
+        if register:
+            self.register_images()
+        if segment:
+            self.segment_images()
+
+    def correct_metadata(self):
+        if 'mre_raw' in self.images:
+            correct_metadata(self.images['mre_raw'], self.images['mre'])
+        if 'wave' in self.images:
+            correct_metadata(self.images['wave'], self.images['mre'])
+        if 'dwi' in self.images:
+            correct_metadata(self.images['dwi'], self.images['mre'], scale=False)
+
+    def restore_wave_image(self):
+        if 'wave' in self.images:
+            self.images['wave'] = restore_wave_image(self.images['wave'], self.verbose)
+
+    def register_images(self):
+        fixed_image = self.images['mre_raw']
+        for seq, moving_image in self.images.items():
+            if seq in {'mre_raw', 'mre'}:
+                continue
+            elif seq in {'mre_phase', 'wave'}:
+                transform = 'translation'
+            else:
+                transform = 'rigid'
+            self.images[seq] = register_image(
+                moving_image, fixed_image, transform, self.verbose
+            )
+
+    def segment_images(self):
+        self.images['mask'] = segment_image(self.images['t1_pre_in'], self.verbose)
+
+    def convert_to_xarrays(self):
+        self.arrays = {}
+        for seq, image in self.images.items():
+            self.arrays[seq] = convert_to_xarray(image)
+
+    def view(self, compare=False):
+        if not hasattr(self, 'arrays'):
+            self.convert_to_xarrays()
+        if compare:
+            arrays = []
+            sequences = []
+            for seq, array in self.arrays.items():
+                a_min = np.percentile(array, 1)
+                a_max = np.percentile(array, 99)
+                a_range = a_max - a_min
+                array = (array - a_min) / a_range
+                if seq == 'wave':
+                    array = array * 2  - 1
+                arrays.append(array)
+                sequences.append(seq)
+            new_dim = xr.DataArray(sequences, dims=['sequence'])
+            array = xr.concat(arrays, dim=new_dim)
+            array = array.coarsen(x=2, y=2).mean()
+            array.name = 'compare'
+            viewer = XArrayViewer(array)
+        else:
+            for seq, array in self.arrays.items():
+                viewer = XArrayViewer(array)
+
+
+def load_nifti_file(nii_file, verbose=True):
+    if verbose:
+        print(f'Loading {nii_file}')
+    image = sitk.ReadImage(nii_file)
+    return image
+
+
+def correct_metadata(image, ref_image, verbose=True, center=True, scale=True):
+    if verbose:
+        print(f'Correcting metadata on {image.GetMetaData("name")}')
+
+    # set metadata based on reference image
+    # i.e. assume that wave image occupies same
+    #   spatial domain as reference image
+    im_size = np.array(image.GetSize())
+    im_spacing = np.array(image.GetSpacing())
+    ref_size = np.array(ref_image.GetSize())
+    ref_spacing = np.array(ref_image.GetSpacing())
+    if scale: # adjust spacing
+        im_spacing = ref_spacing * ref_size / im_size
+        image.SetSpacing(im_spacing)
+
+    if center: # adjust origin
+        im_origin = np.array(image.GetOrigin())
+        ref_origin = np.array(ref_image.GetOrigin())
+        ref_center = ref_origin + (ref_size - 1) / 2 * ref_spacing
+        im_center = im_origin + (im_size - 1) / 2 * im_spacing
+        im_origin += ref_center - im_center
+        image.SetOrigin(im_origin)
+
+
+def restore_wave_image(wave_image, verbose=True):
+    if verbose:
+        print(f'Restoring {wave_image.GetMetaData("name")}')
+
+    array = sitk.GetArrayViewFromImage(wave_image)
+    
+    if wave_image.GetNumberOfComponentsPerPixel() == 3: # convert RGB to grayscale
+        array_r = array[...,0].astype(float)
+        array_g = array[...,1].astype(float)
+        array_b = array[...,2].astype(float)
+        array_gr = np.where(array_r == 0, 0, array_g)
+        array_gb = np.where(array_b == 0, 0, array_g)
+        array = (array_r + array_gr) / 512 - (array_b + array_gb) / 512
+
+        # apply inpainting to remove text
+        array_txt = np.where(
+            (array_r == 255) & (array_g == 255) & (array_b == 255), 1, 0
+        )
+        for i in range(array.shape[0]):
+            array_txt[i] = skimage.morphology.binary_dilation(array_txt[i])
+            array_txt[i] = skimage.morphology.binary_dilation(array_txt[i])
+            array[i] = skimage.restoration.inpaint_biharmonic(array[i], array_txt[i])
+
+    restored_image = sitk.GetImageFromArray(array)
+    restored_image.CopyInformation(wave_image)
+    restored_image.SetMetaData('name', wave_image.GetMetaData('name'))
+    return restored_image
+
+
+def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
+    if verbose:
+        moving_name = moving_image.GetMetaData('name')
+        fixed_name = fixed_image.GetMetaData('name')
+        print(f'Registering {moving_name} to {fixed_name}')
+
+    reg_params = sitk.GetDefaultParameterMap(transform)
+
+    reg_filter = sitk.ElastixImageFilter()
+    reg_filter.SetFixedImage(fixed_image)
+    reg_filter.SetMovingImage(moving_image)
+    reg_filter.SetParameterMap(reg_params)
+    reg_filter.Execute()
+
+    aligned_image = reg_filter.GetResultImage()
+    aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
+    return aligned_image
+
+
+@functools.cache
+def load_segment_model(verbose=True):
+    if verbose:
+        print('Loading segmentation model')
+    import torch, collections
+    from mre_ai.pytorch_arch_models_genesis import UNet3D
+    state_file = '/ocean/projects/asc170022p/bpollack/mre_ai/data/CHAOS/trained_models/001/model_2020-09-30_11-14-20.pkl'
+    with torch.no_grad():
+        model = UNet3D()
+        state_dict = torch.load(state_file, map_location='cpu')
+        state_dict = collections.OrderedDict([
+            (k[7:], v) for k, v in state_dict.items()
+        ])
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
+    return model
+
+
+def segment_image(image, verbose=True):
+    import torch
+    model = load_segment_model(verbose)
+    if verbose:
+        print(f'Segmenting {image.GetMetaData("name")}')
+    array = sitk.GetArrayFromImage(image)
+    a_min, a_max = np.percentile(array, (0.5, 99.5))
+    array = skimage.exposure.rescale_intensity(
+        array, in_range=(a_min, a_max), out_range=(-1.0, 1.0)
+    )
+    with torch.no_grad():
+        input_ = array[np.newaxis,np.newaxis,...]
+        input_ = torch.as_tensor(input_, dtype=torch.float32)
+        output = torch.sigmoid(model(input_))
+        #mask = torch.where(output > 0.5, 0, -1)
+        mask = output.cpu().numpy()[0,0]
+
+    mask_image = sitk.GetImageFromArray(mask)
+    mask_image.CopyInformation(image)
+    mask_image.SetMetaData('name', 'mask')
+    return mask_image
+
+
+def convert_to_xarray(image, verbose=True):
+    if verbose:
+        print(f'Converting {image.GetMetaData("name")} to xarray')
+
+    dimension = image.GetDimension()
+    if dimension == 3:
+        dims = ['x', 'y', 'z']
+    elif dimension == 2:
+        dims = ['x', 'y']
+    
+    size = image.GetSize()
+    origin = image.GetOrigin()
+    spacing = image.GetSpacing()
+
+    coords = {}
+    for i, dim in enumerate(dims):
+        coords[dim] = origin[i] + np.arange(size[i]) * spacing[i]
+
+    n_components = image.GetNumberOfComponentsPerPixel()
+    if n_components > 1:
+        dims.append('component')
+        coords['component'] = np.arange(n_components)
+        array = sitk.GetArrayFromImage(image)
+        axes = (2, 1, 0, 3)
+        array = np.transpose(array, axes)
+    else:
+        array = sitk.GetArrayFromImage(image).T
+
+    array = xr.DataArray(array, dims=dims, coords=coords)
+    array.name = image.GetMetaData('name')
+    return array
+
+
+## BIOQIC
 
 
 def complex_normal(shape, loc, scale):
