@@ -10,21 +10,29 @@ from ..utils import print_if
 from ..visual import XArrayViewer
 
 
-class MREPatient(object):
+SEQUENCES = [
+    't1_pre_in', 't1_pre_water', 't1_pre_out', 't1_pre_fat', 't2',
+    'mre_raw', 'wave', 'mre'
+]
+
+
+class Patient(object):
     
     def __init__(
         self,
-        data_root='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
+        nifti_dir='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
         patient_id='0006',
         sequences=[
             't1_pre_in', 't1_pre_water', 't1_pre_out', 't1_pre_fat', 't2',
             'mre_raw', 'wave', 'mre'
         ],
+        xarray_dir='data/NAFLD',
         verbose=True
     ):
-        self.data_root = pathlib.Path(data_root)
+        self.nifti_dir = pathlib.Path(nifti_dir)
         self.patient_id = patient_id
         self.sequences = sequences
+        self.xarray_dir = pathlib.Path(xarray_dir)
         self.verbose = verbose
 
     @property
@@ -65,7 +73,7 @@ class MREPatient(object):
     def load_images(self):
         self.images = {}
         for seq in self.sequences:
-            nii_file = self.data_root / self.patient_id / (seq + '.nii')
+            nii_file = self.nifti_dir / self.patient_id / (seq + '.nii')
             image = load_nifti_file(nii_file, self.verbose)
             image.SetMetaData('name', seq)
             self.images[seq] = image
@@ -80,7 +88,6 @@ class MREPatient(object):
             self.segment_images(mask_seq, model)
         if register:
             self.register_images(mask_seq)
-        self.convert_to_xarrays()
 
     def correct_metadata(self):
         if 'mre_raw' in self.images:
@@ -119,14 +126,27 @@ class MREPatient(object):
                 self.images['mask'], mask_params, self.verbose
             )
 
-    def convert_to_xarrays(self):
+    def convert_images(self):
         self.arrays = {}
         for seq, image in self.images.items():
             self.arrays[seq] = convert_to_xarray(image)
 
+    def save_xarrays(self):
+        patient_dir = self.xarray_dir / self.patient_id
+        patient_dir.mkdir(parents=True, exist_ok=True)
+        for seq, array in self.arrays.items():
+            nc_file = patient_dir / (seq + '.nc')
+            array.to_netcdf(nc_file)
+
+    def load_xarrays(self):
+        self.arrays = {}
+        for seq in self.sequences + ['mask']:
+            nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
+            self.arrays[seq] = xr.open_dataarray(nc_file)
+
     def view(self, compare=False):
         if not hasattr(self, 'arrays'):
-            self.convert_to_xarrays()
+            self.convert_images()
         if compare:
             arrays = []
             sequences = []
