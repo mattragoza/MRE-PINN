@@ -18,7 +18,10 @@ class MREPatient(object):
         self,
         data_root='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
         patient_id='0006',
-        sequences=['t1_pre_water', 't1_pre_fat', 'mre_raw', 'wave', 'mre'],
+        sequences=[
+            't1_pre_in', 't1_pre_water', 't1_pre_out', 't1_pre_fat', 't2',
+            'mre_raw', 'wave', 'mre'
+        ],
         verbose=True
     ):
         self.data_root = data_root
@@ -69,22 +72,23 @@ class MREPatient(object):
             image.SetMetaData('name', seq)
             self.images[seq] = image
 
-    def preprocess_images(self, register=True, segment=True):
+    def preprocess_images(
+        self, segment=True, mask_seq='t1_pre_out', model=None, register=True,
+    ):
         self.correct_metadata()
         self.restore_wave_image()
         self.resize_images()
-        if register:
-            self.register_images()
         if segment:
-            self.segment_images()
+            self.segment_images(mask_seq, model)
+        if register:
+            self.register_images(mask_seq)
+        self.convert_to_xarrays()
 
     def correct_metadata(self):
         if 'mre_raw' in self.images:
             correct_metadata(self.images['mre_raw'], self.images['mre'])
         if 'wave' in self.images:
             correct_metadata(self.images['wave'], self.images['mre'])
-        if 'dwi' in self.images:
-            correct_metadata(self.images['dwi'], self.images['mre'], scale=False)
 
     def restore_wave_image(self):
         if 'wave' in self.images:
@@ -94,21 +98,28 @@ class MREPatient(object):
         for seq, image in self.images.items():
             self.images[seq] = resize_image(image, (256, 256, 32), self.verbose)
 
-    def register_images(self):
+    def segment_images(self, seq, model):
+        self.images['mask'] = segment_image(self.images[seq], model, self.verbose)
+
+    def register_images(self, mask_seq):
         fixed_image = self.images['mre_raw']
         for seq, moving_image in self.images.items():
-            if seq in {'mre_raw', 'mre'}:
+            if seq in {'mre_raw', 'mre_phase', 'wave', 'mre', 'mask'}:
                 continue
-            elif seq in {'mre_phase', 'wave'}:
-                transform = 'translation'
-            else:
+            else: # t1, t2, dwi
                 transform = 'rigid'
-            self.images[seq] = register_image(
+            self.images[seq], transform_params = register_image(
                 moving_image, fixed_image, transform, self.verbose
             )
-
-    def segment_images(self, seq='t1_pre_in', model=None):
-        self.images['mask'] = segment_image(self.images[seq], model, self.verbose)
+            if seq == mask_seq:
+                mask_params = transform_params
+        if 'mask' in self.images:
+            mask_params[0]['ResampleInterpolator'] = [
+                'FinalNearestNeighborInterpolator'
+            ]
+            self.images['mask'] = transform_image(
+                self.images['mask'], mask_params, self.verbose
+            )
 
     def convert_to_xarrays(self):
         self.arrays = {}
@@ -237,11 +248,26 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
     reg_filter.SetFixedImage(fixed_image)
     reg_filter.SetMovingImage(moving_image)
     reg_filter.SetParameterMap(reg_params)
+    reg_filter.SetLogToConsole(False)
     reg_filter.Execute()
 
+    transform_params = reg_filter.GetTransformParameterMap()
     aligned_image = reg_filter.GetResultImage()
     aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
-    return aligned_image
+    return aligned_image, transform_params
+
+
+def transform_image(image, transform_params, verbose=True):
+    if verbose:
+        print(f'Transforming {image.GetMetaData("name")}')
+    transform = sitk.TransformixImageFilter()
+    transform.SetTransformParameterMap(transform_params)
+    transform.SetMovingImage(image)
+    transform.SetLogToConsole(False)
+    transform.Execute()
+    transformed_image = transform.GetResultImage()
+    transformed_image.SetMetaData('name', image.GetMetaData('name'))
+    return transformed_image
 
 
 @functools.cache
