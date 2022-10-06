@@ -17,7 +17,7 @@ class MREPatient(object):
     def __init__(
         self,
         data_root='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
-        patient_id='001',
+        patient_id='0006',
         sequences=['t1_pre_water', 't1_pre_fat', 'mre_raw', 'wave', 'mre'],
         verbose=True
     ):
@@ -72,6 +72,7 @@ class MREPatient(object):
     def preprocess_images(self, register=True, segment=True):
         self.correct_metadata()
         self.restore_wave_image()
+        self.resize_images()
         if register:
             self.register_images()
         if segment:
@@ -89,6 +90,10 @@ class MREPatient(object):
         if 'wave' in self.images:
             self.images['wave'] = restore_wave_image(self.images['wave'], self.verbose)
 
+    def resize_images(self):
+        for seq, image in self.images.items():
+            self.images[seq] = resize_image(image, (256, 256, 32), self.verbose)
+
     def register_images(self):
         fixed_image = self.images['mre_raw']
         for seq, moving_image in self.images.items():
@@ -102,8 +107,8 @@ class MREPatient(object):
                 moving_image, fixed_image, transform, self.verbose
             )
 
-    def segment_images(self):
-        self.images['mask'] = segment_image(self.images['t1_pre_in'], self.verbose)
+    def segment_images(self, seq='t1_pre_in', model=None):
+        self.images['mask'] = segment_image(self.images[seq], model, self.verbose)
 
     def convert_to_xarrays(self):
         self.arrays = {}
@@ -127,7 +132,7 @@ class MREPatient(object):
                 sequences.append(seq)
             new_dim = xr.DataArray(sequences, dims=['sequence'])
             array = xr.concat(arrays, dim=new_dim)
-            array = array.coarsen(x=2, y=2).mean()
+            array = array.coarsen(x=2, y=2, z=2).mean()
             array.name = 'compare'
             viewer = XArrayViewer(array)
         else:
@@ -195,6 +200,31 @@ def restore_wave_image(wave_image, verbose=True):
     return restored_image
 
 
+def resize_image(image, out_size, verbose=True):
+    if verbose:
+        print(f'Resizing {image.GetMetaData("name")} to {out_size}')
+
+    in_size = np.array(image.GetSize())
+    in_origin = np.array(image.GetOrigin())
+    in_spacing = np.array(image.GetSpacing())
+    in_center = in_origin + (in_size - 1) / 2 * in_spacing
+
+    out_size = np.array(out_size)
+    out_center = in_center
+    out_spacing = in_size / out_size * in_spacing
+    out_origin = out_center - (out_size - 1) / 2  * out_spacing
+
+    ref_image = sitk.GetImageFromArray(np.ones(out_size).T)
+    ref_image.SetSpacing(out_spacing)
+    ref_image.SetOrigin(out_origin)
+
+    transform = sitk.AffineTransform(3)
+    interp_method = sitk.sitkLinear
+    resized_image = sitk.Resample(image, ref_image, transform, interp_method)
+    resized_image.SetMetaData('name', image.GetMetaData('name'))
+    return resized_image
+
+
 def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
     if verbose:
         moving_name = moving_image.GetMetaData('name')
@@ -215,7 +245,7 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
 
 
 @functools.cache
-def load_segment_model(verbose=True):
+def load_segment_model(device, verbose=True):
     if verbose:
         print('Loading segmentation model')
     import torch, collections
@@ -223,7 +253,7 @@ def load_segment_model(verbose=True):
     state_file = '/ocean/projects/asc170022p/bpollack/mre_ai/data/CHAOS/trained_models/001/model_2020-09-30_11-14-20.pkl'
     with torch.no_grad():
         model = UNet3D()
-        state_dict = torch.load(state_file, map_location='cpu')
+        state_dict = torch.load(state_file, map_location=device)
         state_dict = collections.OrderedDict([
             (k[7:], v) for k, v in state_dict.items()
         ])
@@ -232,9 +262,8 @@ def load_segment_model(verbose=True):
     return model
 
 
-def segment_image(image, verbose=True):
+def segment_image(image, model, verbose=True):
     import torch
-    model = load_segment_model(verbose)
     if verbose:
         print(f'Segmenting {image.GetMetaData("name")}')
     array = sitk.GetArrayFromImage(image)
@@ -246,8 +275,8 @@ def segment_image(image, verbose=True):
         input_ = array[np.newaxis,np.newaxis,...]
         input_ = torch.as_tensor(input_, dtype=torch.float32)
         output = torch.sigmoid(model(input_))
-        #mask = torch.where(output > 0.5, 0, -1)
-        mask = output.cpu().numpy()[0,0]
+        mask = torch.where(output > 0.5, 1, 0)
+        mask = mask.detach().cpu().numpy()[0,0]
 
     mask_image = sitk.GetImageFromArray(mask)
     mask_image.CopyInformation(image)
