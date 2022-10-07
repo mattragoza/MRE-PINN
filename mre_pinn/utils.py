@@ -1,3 +1,4 @@
+import sys, tqdm
 from functools import wraps
 import numpy as np
 import xarray as xr
@@ -15,6 +16,10 @@ def exists(x):
 def print_if(verbose, *args, **kwargs):
     if verbose:
         print(*args, **kwargs)
+
+
+def progress(*args, **kwargs):
+    return tqdm.tqdm(*args, **kwargs, file=sys.stdout)
 
 
 def is_iterable(obj, string_ok=False):
