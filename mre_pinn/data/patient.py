@@ -1,4 +1,4 @@
-import pathlib, functools, collections
+import pathlib, functools, collections, tqdm
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -11,9 +11,131 @@ from ..visual import XArrayViewer
 
 
 SEQUENCES = [
-    't1_pre_in', 't1_pre_water', 't1_pre_out', 't1_pre_fat', 't2',
-    'mre_raw', 'wave', 'mre'
+    't1_pre_in',
+    't1_pre_water',
+    't1_pre_out',
+    't1_pre_fat',
+    't2',
+    'mre_raw',
+    'wave',
+    'mre'
 ]
+
+
+class PatientCohort(object):
+
+    def __init__(
+        self,
+        nifti_dir='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
+        patient_ids='*',
+        sequences=SEQUENCES,
+        xarray_dir='data/NAFLD',
+        verbose=True
+    ):
+        self.verbose = verbose
+        self.nifti_dir = pathlib.Path(nifti_dir)
+        if isinstance(patient_ids, str):
+            patient_ids = self.find_patient_ids(patient_ids, sequences)
+        self.patient_ids = patient_ids
+        self.sequences = sequences
+        self.xarray_dir = pathlib.Path(xarray_dir)
+
+        self.patients = {
+            pid: Patient(self.nifti_dir, pid, sequences, verbose=verbose) for pid in patient_ids
+        }
+
+    @property
+    def metadata(self):
+        dfs = []
+        for pid in self.patient_ids:
+            df = self.patients[pid].metadata
+            df['patient_id'] = pid
+            dfs.append(df)
+        df = pd.concat(dfs).reset_index()
+        return df.set_index(['patient_id', 'sequence', 'dimension'])
+
+    def describe(self):
+        dfs = []
+        for pid in self.patient_ids:
+            df = self.patients[pid].describe()
+            df['patient_id'] = pid
+            dfs.append(df)
+        return pd.concat(dfs)
+
+    def find_patient_ids(self, pattern='*', sequences='*.nii'):
+        patient_ids = []
+        for patient_dir in sorted(self.nifti_dir.glob(pattern)):
+            pid = patient_dir.stem
+            patient = Patient(self.nifti_dir, pid, sequences='*.nii')
+            if isinstance(sequences, str):
+                print_if(self.verbose, f'Found patient {pid}')
+                patient_ids.append(pid)
+            elif set(sequences) <= set(patient.sequences):
+                print_if(self.verbose, f'Found patient {pid}')
+                patient_ids.append(pid)
+        return sorted(patient_ids)
+
+    def load_images(self):
+        for pid in tqdm.tqdm(self.patient_ids):
+            self.patients[pid].load_images()
+
+    def preprocess_images(self):
+        model = load_segment_model('cuda', verbose=self.verbose)
+        for pid in tqdm.tqdm(self.patient_ids):
+            self.patients[pid].preprocess_images(model=model)
+
+    def convert_images(self):
+        for pid in tqdm.tqdm(self.patient_ids):
+            self.patients[pid].convert_images()
+
+    def save_xarrays(self):
+        for pid in tqdm.tqdm(self.patient_ids):
+            self.patients[pid].save_xarrays()
+
+    def create_xarrays(self):
+        model = load_segment_model('cuda')
+        for pid in tqdm.tqdm(self.patient_ids):
+            patient = self.patients[pid]
+            patient.load_images()
+            patient.preprocess_images(model=model)
+            patient.convert_images()
+            patient.save_xarrays()
+
+    def load_xarrays(self):
+        for pid in tqdm.tqdm(self.patient_ids):
+            patient = self.patients[pid]
+            patient.load_xarrays()
+
+    def stack_xarrays(self):
+        arrays = []
+        for pid in self.patient_ids:
+            array = self.patients[pid].stack_xarrays()
+            arrays.append(array)
+        dim = xr.DataArray(self.patient_ids, dims=['patient_id'])
+        array = xr.concat(arrays, dim=dim)
+        return array.transpose('patient_id', 'sequence', 'x', 'y', 'z')
+
+    def view(self):
+        arrays = []
+        patient_ids = []
+        for pid in self.patient_ids:
+            patient = self.patients[pid]
+            sequences = []
+            patient_arrays = []
+            for seq, array in patient.arrays.items():
+                a_min = np.percentile(array, 1)
+                a_max = np.percentile(array, 99)
+                a_range = a_max - a_min
+                array = (array - a_min) / a_range
+                if seq == 'wave':
+                    array = array * 2  - 1
+            arrays.append(array)
+            sequences.append(seq)
+        new_dim = xr.DataArray(sequences, dims=['sequence'])
+        array = xr.concat(arrays, dim=new_dim)
+        array = array.coarsen(x=2, y=2, z=2).mean()
+        array.name = 'compare'
+        viewer = XArrayViewer(array)
 
 
 class Patient(object):
@@ -22,18 +144,21 @@ class Patient(object):
         self,
         nifti_dir='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
         patient_id='0006',
-        sequences=[
-            't1_pre_in', 't1_pre_water', 't1_pre_out', 't1_pre_fat', 't2',
-            'mre_raw', 'wave', 'mre'
-        ],
+        sequences='*.nii',
         xarray_dir='data/NAFLD',
         verbose=True
     ):
         self.nifti_dir = pathlib.Path(nifti_dir)
         self.patient_id = patient_id
+        if isinstance(sequences, str): # glob pattern
+            sequences = self.find_sequences(sequences)
         self.sequences = sequences
         self.xarray_dir = pathlib.Path(xarray_dir)
         self.verbose = verbose
+
+    def find_sequences(self, pattern='*.nii'):
+        patient_dir = self.nifti_dir / self.patient_id
+        return sorted(s.stem for s in patient_dir.glob(pattern))
 
     @property
     def metadata(self):
@@ -84,6 +209,7 @@ class Patient(object):
         self.correct_metadata()
         self.restore_wave_image()
         self.resize_images()
+        self.center_images()
         if segment:
             self.segment_images(mask_seq, model)
         if register:
@@ -91,9 +217,9 @@ class Patient(object):
 
     def correct_metadata(self):
         if 'mre_raw' in self.images:
-            correct_metadata(self.images['mre_raw'], self.images['mre'])
+            correct_metadata(self.images['mre_raw'], self.images['mre'], self.verbose)
         if 'wave' in self.images:
-            correct_metadata(self.images['wave'], self.images['mre'])
+            correct_metadata(self.images['wave'], self.images['mre'], self.verbose)
 
     def restore_wave_image(self):
         if 'wave' in self.images:
@@ -102,6 +228,9 @@ class Patient(object):
     def resize_images(self):
         for seq, image in self.images.items():
             self.images[seq] = resize_image(image, (256, 256, 32), self.verbose)
+
+    def center_images(self):
+        pass # TODO
 
     def segment_images(self, seq, model):
         self.images['mask'] = segment_image(self.images[seq], model, self.verbose)
@@ -131,6 +260,22 @@ class Patient(object):
         for seq, image in self.images.items():
             self.arrays[seq] = convert_to_xarray(image)
 
+    def stack_xarrays(self, normalize=False):
+        arrays = []
+        for seq in self.sequences:
+            array = self.arrays[seq]
+            if normalize:
+                a_min = np.percentile(array, 1)
+                a_max = np.percentile(array, 99)
+                a_range = a_max - a_min
+                array = (array - a_min) / a_range
+                if seq == 'wave':
+                    array = array * 2 - 1
+            arrays.append(array)
+        dim = xr.DataArray(self.sequences, dims=['sequence'])
+        array = xr.concat(arrays, dim=dim)
+        return array.transpose('sequence', 'x', 'y', 'z')
+
     def save_xarrays(self):
         patient_dir = self.xarray_dir / self.patient_id
         patient_dir.mkdir(parents=True, exist_ok=True)
@@ -145,24 +290,9 @@ class Patient(object):
             self.arrays[seq] = xr.open_dataarray(nc_file)
 
     def view(self, compare=False):
-        if not hasattr(self, 'arrays'):
-            self.convert_images()
+        self.convert_images()
         if compare:
-            arrays = []
-            sequences = []
-            for seq, array in self.arrays.items():
-                a_min = np.percentile(array, 1)
-                a_max = np.percentile(array, 99)
-                a_range = a_max - a_min
-                array = (array - a_min) / a_range
-                if seq == 'wave':
-                    array = array * 2  - 1
-                arrays.append(array)
-                sequences.append(seq)
-            new_dim = xr.DataArray(sequences, dims=['sequence'])
-            array = xr.concat(arrays, dim=new_dim)
-            array = array.coarsen(x=2, y=2, z=2).mean()
-            array.name = 'compare'
+            array = self.stack_arrays(normalize=True)
             viewer = XArrayViewer(array)
         else:
             for seq, array in self.arrays.items():
