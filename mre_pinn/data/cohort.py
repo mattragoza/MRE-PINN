@@ -12,9 +12,9 @@ class PatientCohort(object):
 
     Args:
         nifti_dirs: Directories to look for NIFTI files.
-        patient_ids: Either a list of expected patient IDs,
+        patient_ids: Either a list of requested patient IDs,
             or a glob pattern for finding available patients IDs.
-        sequences: Either a list of expected sequence names,
+        sequences: Either a list of requested sequence names,
             or a glob pattern for finding available sequences.
         xarray_dir: Directory to save and load xarray files.
         verbose: If True, print verbose output.
@@ -36,17 +36,18 @@ class PatientCohort(object):
 
         if isinstance(patient_ids, str): # glob pattern
             pattern = patient_ids
-            patients, patient_ids = self.find_patients(pattern, sequences)
-            assert patients, \
+            found_patients, found_ids = self.find_patients(pattern, sequences)
+            assert found_patients, \
                 f'No patients matching {repr(pattern)} with sequences {sequences}'
+            self.patient_ids = found_ids
+            self.patients = found_patients
 
-        else: # list of expected patient ids
+        else: # list of requested patient ids
             patients, missing_ids = self.get_patients(patient_ids, sequences)
             assert not missing_ids, \
-                f'Patients {missing_patient_ids} are missing or missing sequences'
-        
-        self.patient_ids = patient_ids
-        self.patients = patients
+                f'Patients {missing_ids} are missing or missing sequences'
+            self.patient_ids = patient_ids
+            self.patients = patients
 
         self.xarray_dir = pathlib.Path(xarray_dir)
 
@@ -70,13 +71,16 @@ class PatientCohort(object):
 
     def get_patients(self, patient_ids, sequences='*'):
         '''
-        Get patients from a list of expected ids and
-        their expected imaging sequences.
+        Get patients from a list of requested IDs and
+        imaging sequences. Returns the found patients
+        the subset of patient IDs that were not found.
         '''
         requested_ids = set(patient_ids)
-        patients, patient_ids = self.find_patients(sequences=sequences)
-        patients = {k: v for k, v in patients.items() if k in requested_ids}
-        missing_ids = requested_ids - set(patient_ids) 
+        found_patients, found_ids = self.find_patients('*', sequences)
+        patients = {
+            pid: p for pid, p in found_patients.items() if pid in requested_ids
+        }
+        missing_ids = requested_ids - set(found_ids) 
         return patients, missing_ids
 
     def __len__(self):

@@ -30,7 +30,7 @@ class Patient(object):
     Args:
         nifti_dir: Directory to look for NIFTI files.
         patient_id: Patient ID/subdirectory to locate files.
-        sequences: Either a list of expected sequence names,
+        sequences: Either a list of requested sequence names,
             or a glob pattern for finding available sequences.
         xarray_dir: Directory to save and load xarray files.
         verbose: If True, print verbose output.
@@ -48,13 +48,14 @@ class Patient(object):
         patient_dir = self.nifti_dir / patient_id
 
         if isinstance(sequences, str): # glob pattern
-            found_sequences = self.find_sequences(pattern=sequences)
+            pattern = sequences
+            found_sequences = self.find_sequences(pattern)
             assert found_sequences, \
                 f'{patient_dir} has no sequences matching {repr(sequences)}'
             self.sequences = found_sequences
 
-        else: # list of required sequences
-            missing_sequences = self.missing_sequences(*sequences)
+        else: # list of requested sequences
+            missing_sequences = self.missing_sequences(sequences)
             assert not missing_sequences, \
                 f'{patient_dir} is missing sequences {missing_sequences}'
             self.sequences = sequences
@@ -70,13 +71,21 @@ class Patient(object):
         patient_dir = self.nifti_dir / self.patient_id
         return sorted(s.stem for s in patient_dir.glob(pattern + '.nii'))
 
-    def missing_sequences(self, *sequences):
+    def missing_sequences(self, sequences):
         '''
-        Check whether imaging sequences are missing
-        for the patient.
+        Return the subset of requested imaging sequences
+        that are missing for the patient.
         '''
-        avail_sequences = self.find_sequences()
-        return set(sequences) - set(avail_sequences)
+        available_sequences = self.find_sequences()
+        return set(sequences) - set(available_sequences)
+
+    def load_images(self):
+        self.images = {}
+        for seq in self.sequences:
+            nii_file = self.nifti_dir / self.patient_id / (seq + '.nii')
+            image = load_nifti_file(nii_file, self.verbose)
+            image.SetMetaData('name', seq)
+            self.images[seq] = image
 
     @property
     def metadata(self):
@@ -112,14 +121,6 @@ class Patient(object):
             df.loc[seq, 'max'] = array.max()
         df['count'] = df['count'].astype(int)
         return df
-
-    def load_images(self):
-        self.images = {}
-        for seq in self.sequences:
-            nii_file = self.nifti_dir / self.patient_id / (seq + '.nii')
-            image = load_nifti_file(nii_file, self.verbose)
-            image.SetMetaData('name', seq)
-            self.images[seq] = image
 
     def preprocess_images(
         self, segment=True, mask_seq='t1_pre_out', model=None, register=True,
