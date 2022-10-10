@@ -127,12 +127,12 @@ class Patient(object):
     ):
         self.correct_metadata()
         self.restore_wave_image()
-        self.resize_images()
-        self.center_images()
+        self.resize_images(n_z=32)
         if segment:
             self.segment_images(mask_seq, model)
         if register:
             self.register_images(mask_seq)
+        #self.resize_images(n_z=4)
 
     def correct_metadata(self):
         if 'mre_raw' in self.images:
@@ -145,9 +145,9 @@ class Patient(object):
         if 'wave' in self.images:
             self.images['wave'] = restore_wave_image(self.images['wave'], self.verbose)
 
-    def resize_images(self):
+    def resize_images(self, n_z):
         for seq, image in self.images.items():
-            self.images[seq] = resize_image(image, (256, 256, 32), self.verbose)
+            self.images[seq] = resize_image(image, (256, 256, n_z), self.verbose)
 
     def center_images(self):
         pass # TODO
@@ -178,7 +178,7 @@ class Patient(object):
     def convert_images(self):
         self.arrays = {}
         for seq, image in self.images.items():
-            self.arrays[seq] = convert_to_xarray(image)
+            self.arrays[seq] = convert_to_xarray(image, self.verbose)
 
     def stack_xarrays(self, normalize=False):
         arrays = []
@@ -197,26 +197,37 @@ class Patient(object):
         return array.transpose('sequence', 'x', 'y', 'z')
 
     def save_xarrays(self):
+        self.convert_images()
         patient_dir = self.xarray_dir / self.patient_id
         patient_dir.mkdir(parents=True, exist_ok=True)
         for seq, array in self.arrays.items():
             nc_file = patient_dir / (seq + '.nc')
-            array.to_netcdf(nc_file)
+            save_xarray_file(nc_file, array, self.verbose)
 
     def load_xarrays(self):
         self.arrays = {}
         for seq in self.sequences + ['mask']:
             nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
-            self.arrays[seq] = xr.open_dataarray(nc_file)
+            self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
 
-    def view(self, compare=False):
+    def view(self, sequences=None, compare=False):
         self.convert_images()
         if compare:
             array = self.stack_xarrays(normalize=True)
             viewer = XArrayViewer(array)
         else:
-            for seq, array in self.arrays.items():
-                viewer = XArrayViewer(array)
+            for seq in sequences or self.sequences:
+                viewer = XArrayViewer(self.arrays[seq])
+
+
+def save_xarray_file(nc_file, array, verbose=True):
+    print_if(verbose, f'Writing {nc_file}')
+    array.to_netcdf(nc_file)
+
+
+def load_xarray_file(nc_file, verbose=True):
+    print_if(verbose, f'Loading {nc_file}')
+    return xr.open_dataarray(nc_file)
 
 
 def load_nifti_file(nii_file, verbose=True):
@@ -277,7 +288,8 @@ def restore_wave_image(wave_image, verbose=True):
 
 
 def resize_image(image, out_size, verbose=True):
-    print_if(verbose, f'Resizing {image.GetMetaData("name")} to {out_size}')
+    im_name = image.GetMetaData("name")
+    print_if(verbose, f'Resizing {im_name} to {out_size}')
 
     in_size = np.array(image.GetSize())
     in_origin = np.array(image.GetOrigin())
@@ -294,7 +306,10 @@ def resize_image(image, out_size, verbose=True):
     ref_image.SetOrigin(out_origin)
 
     transform = sitk.AffineTransform(3)
-    interp_method = sitk.sitkLinear
+    if 'mask' in im_name:
+        interp_method = sitk.sitkNearestNeighbor
+    else:
+        interp_method = sitk.sitkLinear
     resized_image = sitk.Resample(image, ref_image, transform, interp_method)
     resized_image.SetMetaData('name', image.GetMetaData('name'))
     return resized_image
@@ -349,7 +364,9 @@ def load_segment_model(device, verbose=True):
     return model
 
 
-def segment_image(image, model, verbose=True):
+def segment_image(image, model=None, verbose=True):
+    if model is None:
+        model = load_segment_model('cuda')
     print_if(verbose, f'Segmenting {image.GetMetaData("name")}')
     array = sitk.GetArrayFromImage(image)
     a_min, a_max = np.percentile(array, (0.5, 99.5))

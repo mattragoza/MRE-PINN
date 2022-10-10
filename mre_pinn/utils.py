@@ -1,4 +1,5 @@
-import sys, tqdm
+import sys, tqdm, glob, pathlib
+from braceexpand import braceexpand
 from functools import wraps
 import numpy as np
 import xarray as xr
@@ -231,3 +232,15 @@ def main(func):
         func(**kwargs)
 
     return func
+
+
+def braced_glob(pattern):
+    results = []
+    for sub_pattern in braceexpand(str(pattern)):
+        results.extend(glob.glob(sub_pattern))
+    return sorted([pathlib.Path(p) for p in results])
+
+
+def as_path_list(lst):
+    return sorted([pathlib.Path(p) for p in lst])
+

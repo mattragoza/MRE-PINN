@@ -1,8 +1,8 @@
 import sys, pathlib, glob
 import pandas as pd
 
-from .patient import Patient, SEQUENCES
-from ..utils import print_if, progress
+from .patient import Patient, SEQUENCES, load_segment_model
+from ..utils import print_if, progress, braced_glob, as_path_list
 
 
 class PatientCohort(object):
@@ -28,11 +28,17 @@ class PatientCohort(object):
         verbose=True
     ):
         self.verbose = verbose
+        self.xarray_dir = pathlib.Path(xarray_dir)
 
         if isinstance(nifti_dirs, str):
-            nifti_dirs = glob.glob(nifti_dirs)
-        assert nifti_dirs, 'No matching NIFTI dirs'
-        self.nifti_dirs = sorted([pathlib.Path(d) for d in nifti_dirs])
+            nifti_dirs = braced_glob(nifti_dirs)
+            assert nifti_dirs, 'No matching NIFTI dirs'
+        else:
+            nifti_dirs = as_path_list(nifti_dirs)
+            missing_dirs = {d for d in nifti_dirs if not d.exists()}
+            assert not missing_dirs, \
+                f'NIFTI dirs {sorted(missing_dirs)} do not exist'
+        self.nifti_dirs = nifti_dirs
 
         if isinstance(patient_ids, str): # glob pattern
             pattern = patient_ids
@@ -45,11 +51,9 @@ class PatientCohort(object):
         else: # list of requested patient ids
             patients, missing_ids = self.get_patients(patient_ids, sequences)
             assert not missing_ids, \
-                f'Patients {missing_ids} are missing or missing sequences'
+                f'Patients {sorted(missing_ids)} are missing or missing sequences'
             self.patient_ids = patient_ids
             self.patients = patients
-
-        self.xarray_dir = pathlib.Path(xarray_dir)
 
     def find_patients(self, pattern='*', sequences='*'):
         '''
@@ -58,10 +62,10 @@ class PatientCohort(object):
         '''
         patients, patient_ids = {}, []
         for nifti_dir in self.nifti_dirs:
-            for patient_dir in sorted(nifti_dir.glob(pattern)):
+            for patient_dir in braced_glob(nifti_dir / pattern):
                 pid = patient_dir.stem
                 try:
-                    patient = Patient(nifti_dir, pid, sequences)
+                    patient = Patient(nifti_dir, pid, sequences, self.xarray_dir)
                     patient_ids.append(pid)
                     patients[pid] = patient
                 except AssertionError as e:
@@ -76,7 +80,8 @@ class PatientCohort(object):
         the subset of patient IDs that were not found.
         '''
         requested_ids = set(patient_ids)
-        found_patients, found_ids = self.find_patients('*', sequences)
+        pattern = '{' + ','.join(patient_ids) + '}'
+        found_patients, found_ids = self.find_patients(pattern, sequences)
         patients = {
             pid: p for pid, p in found_patients.items() if pid in requested_ids
         }
