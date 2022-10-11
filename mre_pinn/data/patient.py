@@ -122,55 +122,68 @@ class Patient(object):
         df['count'] = df['count'].astype(int)
         return df
 
-    def preprocess_images(
-        self, segment=True, mask_seq='t1_pre_out', model=None, register=True,
-    ):
-        self.correct_metadata()
-        self.restore_wave_image()
-        self.resize_images(n_z=32)
-        if segment:
-            self.segment_images(mask_seq, model)
-        if register:
-            self.register_images(mask_seq)
+    def preprocess_images(self, model=None):
+        # The order of operations warrants some explanation.
+
+        # Some of the MRE images have incorrect spatial metadata,
+        #   so we correct them by extrapolating from the metadata
+        #   of the 'mre' sequence, which seems to be correct. We
+        #   assume that the MRE images all occupy the same spatial
+        #   domain, i.e. same center and overall spatial extent.
+        self.correct_metadata(on=['mre_raw', 'wave'], using='mre')
+
+        # The wave images we have are screenshots of some kind,
+        #   so they are RGB images with text overlays. We convert
+        #   the RGB pixels to grayscale using prior knowledge about
+        #   the wave image colormap (we don't know the scale...)
+        self.restore_wave_image(wave_seq='wave', vmax=1e3)
+
+        # The segmentation model accepts input size of (256, 256, 32),
+        #   so we resize the images to that size. This corresponds to
+        #   downsampling the MRI images and upsampling for MRE images,
+        #   at least in the z dimension.
+        #self.resize_images(size=(256, 256, 32))
+
+        #self.segment_images(mask_seq='t1_pre_out', model=model)
+
+        self.register_images(mask_seq='t1_pre_out')
+
         #self.resize_images(n_z=4)
 
-    def correct_metadata(self):
-        if 'mre_raw' in self.images:
-            correct_metadata(self.images['mre_raw'], self.images['mre'], self.verbose)
-        if 'wave' in self.images:
-            assert self.images['wave'].GetDimension() == 3, 'wave is not 3D'
-            correct_metadata(self.images['wave'], self.images['mre'], self.verbose)
+    def correct_metadata(self, on, using):
+        ref_image = self.images[using]
+        for seq in on:
+            correct_metadata(self.images[seq], ref_image, self.verbose)
 
-    def restore_wave_image(self):
-        if 'wave' in self.images:
-            self.images['wave'] = restore_wave_image(self.images['wave'], self.verbose)
+    def restore_wave_image(self, wave_seq, vmax):
+        self.images[wave_seq] = restore_wave_image(
+            self.images[wave_seq], vmax, self.verbose
+        )
 
-    def resize_images(self, n_z):
+    def resize_images(self, size):
         for seq, image in self.images.items():
-            self.images[seq] = resize_image(image, (256, 256, n_z), self.verbose)
+            self.images[seq] = resize_image(image, size, self.verbose)
 
     def center_images(self):
         pass # TODO
 
-    def segment_images(self, seq, model):
-        self.images['mask'] = segment_image(self.images[seq], model, self.verbose)
+    def segment_images(self, mask_seq, model):
+        self.images['mask'] = segment_image(
+            self.images[mask_seq], model, self.verbose
+        )
 
     def register_images(self, mask_seq):
         fixed_image = self.images['mre_raw']
         for seq, moving_image in self.images.items():
             if seq in {'mre_raw', 'mre_phase', 'wave', 'mre', 'mask'}:
                 continue
-            else: # t1, t2, dwi
-                transform = 'rigid'
+            transform = 'rigid'
             self.images[seq], transform_params = register_image(
                 moving_image, fixed_image, transform, self.verbose
             )
             if seq == mask_seq:
                 mask_params = transform_params
         if 'mask' in self.images:
-            mask_params[0]['ResampleInterpolator'] = [
-                'FinalNearestNeighborInterpolator'
-            ]
             self.images['mask'] = transform_image(
                 self.images['mask'], mask_params, self.verbose
             )
@@ -180,7 +193,7 @@ class Patient(object):
         for seq, image in self.images.items():
             self.arrays[seq] = convert_to_xarray(image, self.verbose)
 
-    def stack_xarrays(self, normalize=False):
+    def stack_xarrays(self, normalize=False, downsample=1):
         arrays = []
         for seq in self.sequences:
             array = self.arrays[seq]
@@ -191,6 +204,10 @@ class Patient(object):
                 array = (array - a_min) / a_range
                 if seq == 'wave':
                     array = array * 2 - 1
+                if downsample > 1:
+                    array = array.coarsen(
+                        x=downsample, y=downsample, z=downsample
+                    ).mean()
             arrays.append(array)
         dim = xr.DataArray(self.sequences, dims=['sequence'])
         array = xr.concat(arrays, dim=dim)
@@ -210,10 +227,10 @@ class Patient(object):
             nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
             self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
 
-    def view(self, sequences=None, compare=False):
+    def view(self, sequences=None, compare=False, downsample=1):
         self.convert_images()
         if compare:
-            array = self.stack_xarrays(normalize=True)
+            array = self.stack_xarrays(normalize=True, downsample=downsample)
             viewer = XArrayViewer(array)
         else:
             for seq in sequences or self.sequences:
@@ -259,7 +276,7 @@ def correct_metadata(image, ref_image, verbose=True, center=True, scale=True):
         image.SetOrigin(im_origin)
 
 
-def restore_wave_image(wave_image, verbose=True):
+def restore_wave_image(wave_image, vmax, verbose=True):
     print_if(verbose, f'Restoring {wave_image.GetMetaData("name")}')
 
     array = sitk.GetArrayViewFromImage(wave_image)
@@ -271,6 +288,7 @@ def restore_wave_image(wave_image, verbose=True):
         array_gr = np.where(array_r == 0, 0, array_g)
         array_gb = np.where(array_b == 0, 0, array_g)
         array = (array_r + array_gr) / 512 - (array_b + array_gb) / 512
+        array *= vmax
 
         # apply inpainting to remove text
         array_txt = np.where(
@@ -321,8 +339,8 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
         fixed_name = fixed_image.GetMetaData('name')
         print(f'Registering {moving_name} to {fixed_name}')
 
+    # perform registration
     reg_params = sitk.GetDefaultParameterMap(transform)
-
     reg_filter = sitk.ElastixImageFilter()
     reg_filter.SetFixedImage(fixed_image)
     reg_filter.SetMovingImage(moving_image)
@@ -330,15 +348,51 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
     reg_filter.SetLogToConsole(False)
     reg_filter.Execute()
 
+    # get transformation parameters
     transform_params = reg_filter.GetTransformParameterMap()
-    aligned_image = reg_filter.GetResultImage()
-    aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
+
+    # make sure that aligned image is sampled at same resolution
+    mvg_size = np.array(moving_image.GetSize())
+    mvg_origin = np.array(moving_image.GetOrigin())
+    mvg_spacing = np.array(moving_image.GetSpacing())
+    mvg_center = mvg_origin + (mvg_size - 1) / 2 * mvg_spacing
+
+    fix_size = np.array(fixed_image.GetSize())
+    fix_origin = np.array(fixed_image.GetOrigin())
+    fix_spacing = np.array(fixed_image.GetSpacing())
+    fix_center = fix_origin + (fix_size - 1) / 2 * fix_spacing
+
+    out_size = mvg_size
+    out_center = fix_center
+    out_spacing = mvg_spacing
+    out_origin = out_center - (out_size - 1) / 2  * out_spacing
+
+    as_string_vec = lambda x: [str(y) for y in x]
+    transform_params[0]['Size'] = as_string_vec(out_size)
+    transform_params[0]['Origin'] = as_string_vec(out_origin)
+    transform_params[0]['Spacing'] = as_string_vec(out_spacing)
+    if verbose:
+        sitk.PrintParameterMap(transform_params)
+        sys.stdout.flush()
+
+    #aligned_image = reg_filter.GetResultImage()
+    #aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
+    aligned_image = transform_image(moving_image, transform_params, verbose)
     return aligned_image, transform_params
 
 
 def transform_image(image, transform_params, verbose=True):
-    print_if(verbose, f'Transforming {image.GetMetaData("name")}')
+    im_name = image.GetMetaData("name")
+    print_if(verbose, f'Transforming {im_name}')
     transform = sitk.TransformixImageFilter()
+    if 'mask' in im_name:
+        transform_params[0]['ResampleInterpolator'] = [
+            'FinalNearestNeighborInterpolator'
+        ]
+    else:
+        transform_params[0]['ResampleInterpolator'] = [
+            'FinalBSplineInterpolator'
+        ]
     transform.SetTransformParameterMap(transform_params)
     transform.SetMovingImage(image)
     transform.SetLogToConsole(False)
