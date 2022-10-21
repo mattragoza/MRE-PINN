@@ -12,6 +12,7 @@ def get_activ_fn(key):
         'r': torch.nn.functional.leaky_relu, 
         't': torch.tanh,
         'k': torch.nn.functional.tanhshrink,
+        'g': torch.nn.functional.gelu
     }[key]
 
 

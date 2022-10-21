@@ -1,87 +1,102 @@
 import torch
 from torch import nn
 
+from .pinn import get_activ_fn
+
 
 class PINO(torch.nn.ModuleList):
 	'''
 	Physics-informed neural operator.
 	'''
-
 	def __init__(
 		self,
 		n_input,
 		n_blocks,
-		n_output
+		n_hidden,
+		n_modes,
+		n_output,
+		activ_fn
 	):
 		super().__init__()
+
+		self.fc_input = torch.nn.Linear(n_input, n_hidden)
 
 		self.blocks = []
 		for i in range(n_blocks):
 			block = PINOBlock(
-				d_model,
-				n_heads,
-				d_ff,
-				activ_fn,
-				dropout
+				n_channels_in=n_hidden,
+				n_channels_out=n_hidden,
+				n_modes=n_modes,
+				activ_fn=activ_fn
 			)
 			self.blocks.append(block)
 			self.add_module(f'block{i}', block)
 
-	def forward(self, a, x, y):
+		self.fc_output = torch.nn.Linear(n_hidden, n_output)
+
+	def forward(self, a):
 		'''
 		Args:
-			a: (N, D_a) input codomain samples.
-			x: (N, D_x) input domain samples.
-			y: (M, D_y) output domain samples.
+			a: (batch_size, n_x, n_y, n_z, n_input) tensor
+			x: (batch_size, n_x, n_y, n_z, 3) tensor
 		Returns:
-			u: (M, D_u) output codomain samples.
+			u: (batch_size, n_x, n_y, n_z, n_output) tensor
 		'''
-		h = y
+		h = self.fc_input(a)
 		for block in self.blocks:
-			h = block(a, x, h)
-		return h
+			h = block(h)
+		u = self.fc_output(h)
+		return u
 
 
-class PINOBlock(torch.nn.ModuleList):
+class PINOBlock(torch.nn.Module):
 
-	def __init__(self, d_model, n_heads, d_ff, activ_fn, dropout=0.0):
-		self.attention = nn.MultiHeadAttention(
-			embed_dim=d_model,
-			num_heads=n_heads,
-			dropout=dropout
-		)
-		self.feedforward = FeedForward(
-			n_input=d_model,
-			n_hidden=d_ff,
-			n_output=d_model,
-			activ_fn=activ_fn,
-			dropout=dropout
-		)
-		self.layer_norm1 = nn.LayerNorm(d_model)
-		self.layer_norm2 = nn.LayerNorm(d_model)
+	def __init__(self, n_channels_in, n_channels_out, n_modes, activ_fn):
+		super().__init__()
+		self.conv = SpectralConv3d(n_channels_in, n_channels_out, n_modes)
+		self.fc = torch.nn.Linear(n_channels_in, n_channels_out)
+		self.activ_fn = get_activ_fn(activ_fn)
 
-	def forward(self, a, x, h):
+	def forward(self, h):
 		'''
 		Args:
-			a: (N, D_a) input codomain samples.
-			x: (N, D_x) input domain samples.
-			h: (N, D_h) hidden representation.
+			h: (batch_size, n_channels_in, n_x, n_y, n_z)
 		Returns:
-			h': (N, D_h) new hidden representation.
+			out: (batch_size, n_channels_out, n_x, n_y, n_z)
 		'''
-		h = self.layer_norm1(self.attention(query=h, key=x, value=a) + h)
-		return self.layer_norm2(self.feedforward(input=h) + h)
+		return self.activ_fn(self.conv(h) + self.fc(h))
 
 
-class FeedForward(torch.nn.Sequential):
-	
-	def __init__(self, n_input, n_hidden, n_output, activ_fn, dropout=0.0):
-		self.linear1 = nn.Linear(n_input, n_hidden)
-		self.dropout1 = nn.Dropout(dropout)
-		self.activ_fn = activ_fn
-		self.linear2 = nn.Linear(n_hidden, n_output)
-		self.dropout2 = nn.Dropout(dropout)
+class SpectralConv3d(torch.nn.Module):
 
-	def forward(self, input):
-		hidden = self.dropout1(self.activ_fn(self.linear1(input)))
-		return self.dropout2(self.linear2(hidden))
+	def __init__(self, n_channels_in, n_channels_out, n_modes=16):
+		super().__init__()
+		self.n_channels_in = n_channels_in
+		self.n_channels_out = n_channels_out
+		self.n_modes = n_modes
+
+		scale = 1 / (n_channels_in * n_channels_out)
+		self.weights = nn.Parameter(scale * torch.rand(
+			n_modes, n_modes, n_modes, n_channels_in, n_channels_out,
+			dtype=torch.complex64
+		))
+
+	def forward(self, h):
+		'''
+		Args:
+			h: (batch_size, n_x, n_y, n_z, n_channels_in)
+		Returns:
+			out: (batch_size, n_x, n_y, n_z, n_channels_out)
+		'''
+		assert h.shape[-1] == self.n_channels_in
+		batch_size = h.shape[0]
+		spatial_dims = (1, 2, 3)
+		n_x, n_y, n_z = h.shape[1:4]
+
+		F_h = torch.fft.rfftn(h, dim=spatial_dims)
+		n = self.n_modes
+		F_out = torch.zeros(batch_size, n_x, n_y, n_z, self.n_channels_out)
+		F_out[:,:n,:n,:n,:] = torch.einsum(
+			'bxyzi,xyzio->bxyzo', F_h[:,:n,:n,:n,:], self.weights
+		)
+		return torch.fft.irfftn(F_out, s=(n_x, n_y, n_z), dim=spatial_dims)
