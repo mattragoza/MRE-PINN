@@ -80,7 +80,10 @@ class PatientCohort(object):
         the subset of patient IDs that were not found.
         '''
         requested_ids = set(patient_ids)
-        pattern = '{' + ','.join(patient_ids) + '}'
+        if len(patient_ids) > 1:
+            pattern = '{' + ','.join(patient_ids) + '}'
+        else:
+            pattern = patient_ids[0]
         found_patients, found_ids = self.find_patients(pattern, sequences)
         patients = {
             pid: p for pid, p in found_patients.items() if pid in requested_ids
