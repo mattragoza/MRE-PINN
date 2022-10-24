@@ -4,12 +4,12 @@ import xarray as xr
 import pandas as pd
 import deepxde
 
-from .utils import as_xarray
-from .training import PeriodicCallback
-from . import discrete, visual
+from ..utils import as_xarray
+from ..training.callbacks import PeriodicCallback
+from .. import discrete, visual
 
 
-class TestEvaluator(PeriodicCallback):
+class PINNEvaluator(PeriodicCallback):
 
     def __init__(
         self,

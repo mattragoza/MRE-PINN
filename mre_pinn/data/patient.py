@@ -148,7 +148,7 @@ class Patient(object):
 
         self.register_images(mask_seq='t1_pre_out')
 
-        #self.resize_images(n_z=4)
+        #self.resize_images((256, 256, 4))
 
     def correct_metadata(self, on, using):
         ref_image = self.images[using]

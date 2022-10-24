@@ -53,7 +53,7 @@ def train(
     )
 
     # define model architecture
-    net = mre_pinn.pinn.ParallelPINN(
+    pinn = mre_pinn.model.ParallelPINN(
         n_inputs=[data.field.n_spatial_dims + 1, data.field.n_spatial_dims],
         n_outputs=[data.field.n_spatial_dims, 1],
         omega0=omega0,
@@ -65,20 +65,20 @@ def train(
         conditional=conditional,
         dtype=torch.float32
     )
-    print(net)
+    print(pinn)
 
     # define PDE that we want to solve
     pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
 
     # compile model and configure training settings
-    model = mre_pinn.training.PINNModel(data, net, pde, batch_size)
+    model = mre_pinn.training.PINNModel(data, pinn, pde, batch_size)
     model.compile(
         optimizer=optimizer,
         lr=learning_rate,
         loss_weights=[pde_loss_wt, data_loss_wt],
-        loss=mre_pinn.training.standardized_msae_loss_fn(data.u.values)
+        loss=mre_pinn.training.losses.standardized_msae_loss_fn(data.u.values)
     )
-    test_eval = mre_pinn.testing.TestEvaluator(
+    test_eval = mre_pinn.testing.PINNEvaluator(
         data=test_data,
         model=model,
         batch_size=batch_size,

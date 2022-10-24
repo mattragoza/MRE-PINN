@@ -4,14 +4,13 @@ import deepxde
 
 from . import (
 	data,
-	fields,
-	pinn,
-	pino,
-	pde,
+	model,
 	training,
 	testing,
+	fields,
+	pde,
 	discrete,
+	fem,
 	visual,
-	utils,
-	fem
+	utils
 )

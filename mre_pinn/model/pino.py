@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from .pinn import get_activ_fn
+from .generic import get_activ_fn, ParallelNet
 
 
 class PINO(torch.nn.ModuleList):
@@ -10,16 +10,17 @@ class PINO(torch.nn.ModuleList):
 	'''
 	def __init__(
 		self,
-		n_input,
+		n_spatial_dims,
+		n_channels_in,
 		n_blocks,
 		n_hidden,
 		n_modes,
-		n_output,
+		n_channels_out,
 		activ_fn
 	):
 		super().__init__()
 
-		self.fc_input = torch.nn.Linear(n_input, n_hidden)
+		self.fc_input = torch.nn.Linear(n_spatial_dims + n_channels_in, n_hidden)
 
 		self.blocks = []
 		for i in range(n_blocks):
@@ -34,15 +35,15 @@ class PINO(torch.nn.ModuleList):
 
 		self.fc_output = torch.nn.Linear(n_hidden, n_output)
 
-	def forward(self, a):
+	def forward(self, a, x):
 		'''
 		Args:
-			a: (batch_size, n_x, n_y, n_z, n_input) tensor
-			x: (batch_size, n_x, n_y, n_z, 3) tensor
+			a: (batch_size, n_x, n_y, n_z, n_channels_in) tensor
+			x: (batch_size, n_x, n_y, n_z, n_spatial_dims) tensor
 		Returns:
-			u: (batch_size, n_x, n_y, n_z, n_output) tensor
+			u: (batch_size, n_x, n_y, n_z, n_channels_out) tensor
 		'''
-		h = self.fc_input(a)
+		h = self.fc_input(torch.cat([a, x], dim=-1))
 		for block in self.blocks:
 			h = block(h)
 		u = self.fc_output(h)
@@ -100,3 +101,15 @@ class SpectralConv3d(torch.nn.Module):
 			'bxyzi,xyzio->bxyzo', F_h[:,:n,:n,:n,:], self.weights
 		)
 		return torch.fft.irfftn(F_out, s=(n_x, n_y, n_z), dim=spatial_dims)
+
+
+class FFT(torch.autograd.Function):
+	
+	@staticmethod
+	def forward(ctx, a, x):
+		ctx.save_for_backward(a, x)
+		return torch.fft.fftn(a)
+
+	@staticmethod
+	def backward(ctx, grad_output):
+		input, = ctx.saved_tensors
