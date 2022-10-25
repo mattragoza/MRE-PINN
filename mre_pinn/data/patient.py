@@ -143,13 +143,15 @@ class Patient(object):
         #   so we resize the images to that size. This corresponds to
         #   downsampling the MRI images and upsampling for MRE images,
         #   at least in the z dimension.
-        #self.resize_images(size=(256, 256, 32))
-
-        #self.segment_images(mask_seq='t1_pre_out', model=model)
+        self.resize_images(['t1_pre_out'], size=(256, 256, 32))
+        self.segment_images(mask_seq='t1_pre_out', model=model)
 
         self.register_images(mask_seq='t1_pre_out')
 
-        #self.resize_images((256, 256, 4))
+        mre_sequences = ['mre_raw', 'wave', 'mre']
+        anat_sequences = [s for s in self.sequences if s not in mre_sequences]
+        self.resize_images(anat_sequences, size=(256, 256, 16))
+        self.resize_images(mre_sequences, size=(256, 256, 4))
 
     def correct_metadata(self, on, using):
         ref_image = self.images[using]
@@ -161,8 +163,9 @@ class Patient(object):
             self.images[wave_seq], vmax, self.verbose
         )
 
-    def resize_images(self, size):
-        for seq, image in self.images.items():
+    def resize_images(self, sequences, size):
+        for seq in sequences:
+            image = self.images[seq]
             self.images[seq] = resize_image(image, size, self.verbose)
 
     def center_images(self):
