@@ -6,6 +6,7 @@ import skimage
 import SimpleITK as sitk
 import torch
 
+from .segment import UNet3D
 from ..utils import print_if
 from ..visual import XArrayViewer
 
@@ -228,7 +229,6 @@ class Patient(object):
             self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
 
     def view(self, sequences=None, compare=False, downsample=1):
-        self.convert_images()
         if compare:
             array = self.stack_xarrays(normalize=True, downsample=downsample)
             viewer = XArrayViewer(array)
@@ -405,8 +405,8 @@ def transform_image(image, transform_params, verbose=True):
 @functools.cache
 def load_segment_model(device, verbose=True):
     print_if(verbose, 'Loading segmentation model')
-    from mre_ai.pytorch_arch_models_genesis import UNet3D
-    state_file = '/ocean/projects/asc170022p/bpollack/mre_ai/data/CHAOS/trained_models/001/model_2020-09-30_11-14-20.pkl'
+    state_file = '/ocean/projects/asc170022p/bpollack/' \
+        'mre_ai/data/CHAOS/trained_models/001/model_2020-09-30_11-14-20.pkl'
     with torch.no_grad():
         model = UNet3D()
         state_dict = torch.load(state_file, map_location=device)
