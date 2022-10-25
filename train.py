@@ -44,7 +44,7 @@ def train(
     save_prefix=None
 ):
     # load the training data
-    data, test_data = mre_pinn.data.load_bioqic_dataset(
+    data = mre_pinn.data.load_bioqic_dataset(
         data_root=data_root,
         data_name=data_name,
         frequency=frequency,
@@ -78,10 +78,7 @@ def train(
         loss_weights=[pde_loss_wt, data_loss_wt],
         loss=mre_pinn.training.losses.standardized_msae_loss_fn(data.u.values)
     )
-    test_eval = mre_pinn.testing.PINNEvaluator(
-        data=test_data,
-        model=model,
-        batch_size=batch_size,
+    test_eval = mre_pinn.testing.TestEvaluator(
         test_every=test_every,
         save_every=save_every,
         save_prefix=save_prefix

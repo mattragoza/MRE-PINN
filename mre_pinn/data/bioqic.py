@@ -62,17 +62,15 @@ def load_bioqic_dataset(
         data['Lu'] = discrete.savgol_laplacian(data['u'], order=3, kernel_size=5)
         data['Mu'] = discrete.helmholtz_inversion(data['Ku'], data['Lu'], polar=True)
 
-    # test on 4x downsampled data
-    if downsample:
+    if downsample: # spatial downsampling
         downsample = {d: downsample for d in data.field.spatial_dims}
         test_data = data.coarsen(boundary='trim', **downsample).mean()
         test_data['spatial_region'] = \
             data.spatial_region.coarsen(boundary='trim', **downsample).max()
         test_data = test_data.assign_coords(spatial_region=test_data.spatial_region)
-    else:
-        test_data = data.copy()
+        data = test_data
 
-    return data, test_data
+    return data
 
 
 def complex_normal(shape, loc, scale):

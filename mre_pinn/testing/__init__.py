@@ -1,1 +1,1 @@
-from .pinn_testing import PINNEvaluator
+from .generic import TestEvaluator
