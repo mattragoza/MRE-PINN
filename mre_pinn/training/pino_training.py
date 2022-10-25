@@ -5,7 +5,7 @@ import deepxde
 
 class PINOData(deepxde.data.Data):
 
-    def __init__(self, cohort, pde, batch_size=None):
+    def __init__(self, cohort, pde, batch_size=None, device='cuda'):
 
         self.cohort = cohort
         self.pde = pde
@@ -13,11 +13,12 @@ class PINOData(deepxde.data.Data):
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
         self.batch_size = batch_size
 
+        self.device = device
+
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         (a, x, y), (u_true,) = inputs, targets
         u_pred = outputs
         data_loss = loss_fn(u_true, u_pred)
-        print(data_loss.shape)
         #pde_res = self.pde(x, u_pred, mu_pred)
         pde_loss = 0 #loss_fn(0, pde_res)
         return [data_loss, data_loss]
@@ -37,22 +38,23 @@ class PINOData(deepxde.data.Data):
         ]
         a_arrays = [patient.arrays[seq].values for seq in a_sequences]
         a = np.stack(a_arrays, axis=-1)
-        a = torch.tensor(a, device='cuda', dtype=torch.float32)
+        a = torch.tensor(a, device=self.device, dtype=torch.float32)
 
         x = patient.arrays['t1_pre_in'].field.points(reshape=False)
-        x = torch.tensor(x, device='cuda', dtype=torch.float32)
+        x = torch.tensor(x, device=self.device, dtype=torch.float32)
 
         u = patient.arrays['wave'].values[...,None]
-        u = torch.tensor(u, device='cuda', dtype=torch.float32)
+        u = torch.tensor(u, device=self.device, dtype=torch.float32)
 
         y = patient.arrays['wave'].field.points(reshape=False)
-        y = torch.tensor(y, device='cuda', dtype=torch.float32)
+        y = torch.tensor(y, device=self.device, dtype=torch.float32)
+        #u = torch.sin(2 * np.pi * 1e-3 * y[...,0:1])
         
         mu = patient.arrays['mre'].values[...,None]
-        mu = torch.tensor(mu, device='cuda', dtype=torch.float32)
+        mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
 
         z = patient.arrays['mre'].field.points(reshape=False)
-        z = torch.tensor(z, device='cuda', dtype=torch.float32)
+        z = torch.tensor(z, device=self.device, dtype=torch.float32)
 
         return (a, x, y), u
 
@@ -78,7 +80,7 @@ class PINOData(deepxde.data.Data):
         return inputs, targets
 
     def test(self):
-        return self.train_next_batch()
+        return self.train_next_batch() #TODO
 
 
 class PINOModel(deepxde.Model):

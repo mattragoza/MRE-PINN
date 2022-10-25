@@ -17,11 +17,12 @@ class PINO(torch.nn.ModuleList):
         n_hidden,
         n_modes,
         n_channels_out,
-        activ_fn
+        activ_fn,
+        device='cuda'
     ):
         super().__init__()
 
-        self.fc_in = torch.nn.Linear(n_channels_in, n_hidden)
+        self.fc_in = torch.nn.Linear(n_channels_in, n_hidden, device=device)
 
         self.blocks = []
         for i in range(n_blocks):
@@ -30,13 +31,14 @@ class PINO(torch.nn.ModuleList):
                 n_channels_in=n_hidden,
                 n_channels_out=n_hidden,
                 n_modes=n_modes,
-                activ_fn=activ_fn
+                activ_fn=activ_fn,
+                device=device
             )
             self.blocks.append(block)
             self.add_module(f'block{i}', block)
 
         self.conv_out = SpectralConv3d(
-            n_spatial_dims, n_hidden, n_channels_out, n_modes
+            n_spatial_dims, n_hidden, n_channels_out, n_modes, device=device
         )
         self.regularizer = None
 
@@ -61,13 +63,23 @@ class PINO(torch.nn.ModuleList):
 class PINOBlock(torch.nn.Module):
 
     def __init__(
-        self, n_spatial_dims, n_channels_in, n_channels_out, n_modes, activ_fn
+        self,
+        n_spatial_dims,
+        n_channels_in,
+        n_channels_out,
+        n_modes,
+        activ_fn,
+        device='cuda'
     ):
         super().__init__()
-        self.conv = SpectralConv3d(
-            n_spatial_dims, n_channels_in, n_channels_out, n_modes
+        self.att = SpectralAttention(
+            n_spatial_dims,
+            n_channels_in,
+            n_channels_out,
+            n_modes,
+            device=device
         )
-        self.fc = torch.nn.Linear(n_channels_in, n_channels_out)
+        self.fc = torch.nn.Linear(n_channels_in, n_channels_out, device=device)
         self.activ_fn = get_activ_fn(activ_fn)
 
     def forward(self, h, x):
@@ -79,60 +91,79 @@ class PINOBlock(torch.nn.Module):
         Returns:
             out: (batch_size, n_x, n_y, n_z, n_channels_out)
         '''
-        h = self.conv(h, x, x) + self.fc(x)
+        h = self.att(h, x, x) + self.fc(h)
         return self.activ_fn(h)
 
 
-class SpectralConv3d(torch.nn.Module):
+class SpectralAttention(torch.nn.Module):
 
-    def __init__(self, n_spatial_dims, n_channels_in, n_channels_out, n_modes=16):
+    def __init__(
+        self,
+        n_spatial_dims,
+        n_channels_in,
+        n_channels_out,
+        n_modes=16,
+        device='cuda'
+    ):
         super().__init__()
         self.n_spatial_dims = n_spatial_dims
         self.n_channels_in = n_channels_in
         self.n_channels_out = n_channels_out
         self.n_modes = n_modes
 
-        scale = 1e-3
-        self.modes = nn.Parameter(scale * torch.rand(
-            (n_modes, n_spatial_dims), dtype=torch.float32
-        ))
-        scale = 1 / (n_channels_in * n_channels_out)
-        self.kernel = nn.Parameter(scale * torch.rand(
-            (n_modes, n_channels_in, n_channels_out), dtype=torch.complex64
-        ))
+        self.init_weights(device=device)
+        self.regularizer = None
+
+    def init_weights(self, c=6, device='device'):
+
+        scale = np.sqrt(c / self.n_channels_in) * 1e-3
+        shape = (self.n_modes, self.n_channels_in)
+        modes_a = scale * torch.rand(shape, device=device, dtype=torch.float32)
+        self.modes_a = nn.Parameter(modes_a)
+
+        scale = np.sqrt(c / self.n_spatial_dims) * 1e-2
+        shape = (self.n_modes, self.n_spatial_dims)
+        modes_x = scale * torch.rand(shape, device=device, dtype=torch.float32)
+        self.modes_x = nn.Parameter(modes_x)
+
+        scale = np.sqrt(c / self.n_spatial_dims) * 1e-2
+        shape = (self.n_modes, self.n_spatial_dims)
+        modes_y = scale * torch.rand(shape, device=device, dtype=torch.float32)
+        self.modes_y = nn.Parameter(modes_y)
+
+        scale = np.sqrt(c / self.n_modes) * 1e-3
+        shape = (self.n_modes, self.n_channels_out)
+        modes_u = scale * torch.rand(shape, device=device, dtype=torch.float32)
+        self.modes_u = nn.Parameter(modes_u)
 
     def __repr__(self):
-        return f'SpectralConv3d(n_spatial_dims={self.n_spatial_dims}, n_channels_in={self.n_channels_in}, n_channels_out={self.n_channels_out}, n_modes={self.n_modes})'
+        return  (f'SpectralAttention('
+            f'n_spatial_dims={self.n_spatial_dims}, '
+            f'n_channels_in={self.n_channels_in}, '
+            f'n_channels_out={self.n_channels_out}, '
+            f'n_modes={self.n_modes}' 
+        ')')
 
-    def forward(self, h, x, y):
+    def forward(self, inputs):
         '''
         Args:
-            h: (batch_size, n_x, n_y, n_z, n_channels_in)
+            a: (batch_size, n_x, n_y, n_z, n_channels_in)
             x: (batch_size, n_x, n_y, n_z, n_spatial_dims)
             y: (batch_size, n_x, n_y, n_z, n_spatial_dims)
         Returns:
-            g: (batch_size, n_x, n_y, n_z, n_channels_in)
+            u: (batch_size, n_x, n_y, n_z, n_channels_in)
         '''
-        assert h.shape[-1] == self.n_channels_in
-        assert x.shape[-1] == self.n_spatial_dims
-        assert y.shape[-1] == self.n_spatial_dims
+        a, x, y = inputs
+        
+        A = torch.einsum('bxyzi,fi->bxyzf', a, self.modes_a)
+        X = torch.einsum('bxyzd,gd->bxyzg', x, self.modes_x)
+        Y = torch.einsum('bxyzd,gd->bxyzg', y, self.modes_y)
 
-        batch_size = h.shape[0]
-        spatial_dims = (1, 2, 3)
-        n_x, n_y, n_z = h.shape[1:4]
+        X = torch.exp(-2j * np.pi * X)
+        Y = torch.exp( 2j * np.pi * Y)
 
-        # convert to frequency domain
-        x_dot_s = torch.einsum('bxyzd,fd->bxyzf', x, self.modes)
-        phi_x = torch.exp(-2j * np.pi * x_dot_s)
-        H = torch.einsum('bxyzi,bxyzf->bfi', h + 0j, phi_x)
+        AX = torch.einsum('bxyzf,bxyzg->bfg', A + 0j, X)
+        U = torch.einsum('bfg,bxyzg->bxyzf', AX, Y).real
 
-        # frequency-domain convolution
-        G = torch.einsum('bfi,fio->bfo', H, self.kernel)
-
-        # convert back to spatial domain
-        y_dot_s = torch.einsum('bxyzd,fd->bxyzf', y, self.modes)
-        phi_y = torch.exp(2j * np.pi * y_dot_s)
-        g = torch.einsum('bfo,bxyzf->bxyzo', G, phi_y).real
-        print(g.shape)
-
-        return g
+        u = torch.einsum('bxyzf,fo->bxyzo', U, self.modes_u)
+        return u
