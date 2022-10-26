@@ -46,10 +46,11 @@ class PINNData(deepxde.data.Data):
     def train_next_batch(self, batch_size=None):
         '''
         Args:
-            batch_size
+            batch_size: Number of points in batch.
         Returns:
-            inputs: A tuple of input arrays.
-            targets: The target output array.
+            inputs: Tuple of input tensors.
+            targets: Target tensor.
+            aux_vars: Tuple of auxiliary tensors.
         '''
         batch_size = batch_size or self.batch_size
         inds = self.batch_sampler.get_next(batch_size)
@@ -89,7 +90,7 @@ class PINNModel(deepxde.Model):
 
         # compute model predictions
         x.requires_grad_(True)
-        u_pred, mu_pred = self.net((x, a))
+        u_pred, mu_pred = self.net(inputs=(x, a))
 
         # compute differential operators
         lu_pred = laplacian(u_pred, x, dim=1)
@@ -101,9 +102,9 @@ class PINNModel(deepxde.Model):
     def test(self):
         
         # get ground truth and model predictions
-        (x, a), u_true, (mu_true, Mu_base) = self.data.test()
+        inputs, targets, aux_vars = self.data.test()
         u_pred, lu_pred, mu_pred, f_trac, f_body = \
-            self.predict(x, a, batch_size=self.batch_size)
+            self.predict(*inputs, batch_size=self.batch_size)
 
         # convert tensors to xarrays
         u_true = self.data.arrays.u
