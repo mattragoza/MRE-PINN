@@ -18,3 +18,9 @@ def standardized_msae_loss_fn(y):
             torch.abs(y_true - y_pred)**2 / variance
         )
     return loss_fn
+
+
+def msae_loss(y_true, y_pred):
+    return torch.mean(
+        torch.abs(y_true - y_pred)**2
+    )

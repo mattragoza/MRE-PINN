@@ -82,10 +82,10 @@ class PINOBlock(torch.nn.Module):
         self.fc = torch.nn.Linear(n_channels_in, n_channels_out, device=device)
         self.activ_fn = get_activ_fn(activ_fn)
 
-    def forward(self, h, x):
+    def forward(self, a, x, y):
         '''
         Args:
-            h: (batch_size, n_x, n_y, n_z, n_channels_in)
+            a: (batch_size, n_x, n_y, n_z, n_channels_in)
             x: (batch_size, n_x, n_y, n_z, n_spatial_dims)
             y: (batch_size, n_x, n_y, n_z, n_spatial_dims)
         Returns:
@@ -114,27 +114,27 @@ class SpectralAttention(torch.nn.Module):
         self.init_weights(device=device)
         self.regularizer = None
 
-    def init_weights(self, c=6, device='device'):
+    def init_weights(self, omega=30/300, c=6, device='device'):
 
-        scale = np.sqrt(c / self.n_channels_in) * 1e-3
+        scale = np.sqrt(c / (self.n_channels_in + self.n_modes))
         shape = (self.n_modes, self.n_channels_in)
-        modes_a = scale * torch.rand(shape, device=device, dtype=torch.float32)
-        self.modes_a = nn.Parameter(modes_a)
+        modes_a = 2 * torch.rand(shape, device=device, dtype=torch.float32) - 1
+        self.modes_a = nn.Parameter(scale * modes_a)
 
-        scale = np.sqrt(c / self.n_spatial_dims) * 1e-2
+        scale = np.sqrt(c / (self.n_spatial_dims + self.n_modes)) * omega
         shape = (self.n_modes, self.n_spatial_dims)
-        modes_x = scale * torch.rand(shape, device=device, dtype=torch.float32)
-        self.modes_x = nn.Parameter(modes_x)
+        modes_x = 2 * torch.rand(shape, device=device, dtype=torch.float32) - 1
+        self.modes_x = nn.Parameter(scale * modes_x)
 
-        scale = np.sqrt(c / self.n_spatial_dims) * 1e-2
+        scale = np.sqrt(c / (self.n_spatial_dims + self.n_modes)) * omega
         shape = (self.n_modes, self.n_spatial_dims)
-        modes_y = scale * torch.rand(shape, device=device, dtype=torch.float32)
-        self.modes_y = nn.Parameter(modes_y)
+        modes_y = 2 * torch.rand(shape, device=device, dtype=torch.float32) - 1
+        self.modes_y = nn.Parameter(scale * modes_y)
 
-        scale = np.sqrt(c / self.n_modes) * 1e-3
+        scale = np.sqrt(c / (self.n_modes + self.n_channels_out))
         shape = (self.n_modes, self.n_channels_out)
-        modes_u = scale * torch.rand(shape, device=device, dtype=torch.float32)
-        self.modes_u = nn.Parameter(modes_u)
+        modes_u = 2 * torch.rand(shape, device=device, dtype=torch.float32) - 1
+        self.modes_u = nn.Parameter(scale * modes_u)
 
     def __repr__(self):
         return  (f'SpectralAttention('
@@ -152,9 +152,8 @@ class SpectralAttention(torch.nn.Module):
             y: (batch_size, n_x, n_y, n_z, n_spatial_dims)
         Returns:
             u: (batch_size, n_x, n_y, n_z, n_channels_in)
-        '''
+        '''    
         a, x, y = inputs
-        
         A = torch.einsum('bxyzi,fi->bxyzf', a, self.modes_a)
         X = torch.einsum('bxyzd,gd->bxyzg', x, self.modes_x)
         Y = torch.einsum('bxyzd,gd->bxyzg', y, self.modes_y)
@@ -162,8 +161,9 @@ class SpectralAttention(torch.nn.Module):
         X = torch.exp(-2j * np.pi * X)
         Y = torch.exp( 2j * np.pi * Y)
 
+        N = y.shape[1] * y.shape[2] * y.shape[3]
         AX = torch.einsum('bxyzf,bxyzg->bfg', A + 0j, X)
-        U = torch.einsum('bfg,bxyzg->bxyzf', AX, Y).real
+        U = torch.einsum('bfg,bxyzg->bxyzf', AX, Y).real / N
 
         u = torch.einsum('bxyzf,fo->bxyzo', U, self.modes_u)
         return u
