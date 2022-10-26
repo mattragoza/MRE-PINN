@@ -10,12 +10,13 @@ from .. import discrete
 
 class PINOData(deepxde.data.Data):
 
-    def __init__(self, cohort, pde, batch_size=None, device='cuda'):
+    def __init__(self, cohort, pde, patch_size=None, batch_size=None, device='cuda'):
         self.cohort = cohort
         self.pde = pde
 
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
         self.batch_size = batch_size
+        self.patch_size = patch_size
         self.device = device
 
         # debugging spectral attention
@@ -31,7 +32,7 @@ class PINOData(deepxde.data.Data):
         pde_loss = 0 #loss_fn(0, pde_res)
         return [data_loss, data_loss]
 
-    def get_tensors(self, idx):
+    def get_tensors(self, idx, patch_size=None):
         '''
         Args:
             idx: Patient index in cohort.
@@ -52,12 +53,26 @@ class PINOData(deepxde.data.Data):
         mu = patient.arrays['mre'].values[...,None]
         z = patient.arrays['mre'].field.points(reshape=False)
 
+        if patch_size is not None: # sample patch
+            n_x, n_y, n_z = y.shape[:3]
+            patch_x = np.random.randint(n_x - patch_size + 1)
+            patch_y = np.random.randint(n_y - patch_size + 1)
+
+            a = a[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            x = x[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            u = u[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            y = y[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            mu = mu[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            z = z[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+
+        # convert arrays to tensors
         a = torch.tensor(a, device=self.device, dtype=torch.float32)
         x = torch.tensor(x, device=self.device, dtype=torch.float32)
         u = torch.tensor(u, device=self.device, dtype=torch.float32)
         y = torch.tensor(y, device=self.device, dtype=torch.float32)
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
         z = torch.tensor(z, device=self.device, dtype=torch.float32)
+
         return (a, x, y), u, (mu, mu * 0)
 
     def train_next_batch(self, batch_size=None):
@@ -70,11 +85,14 @@ class PINOData(deepxde.data.Data):
             aux_vars: Tuple of auxiliary tensors.
         '''
         batch_size = batch_size or self.batch_size
-        batch_inds = self.batch_sampler.get_next(batch_size)
+
+        # patch sampling debugging
+        #batch_inds = self.batch_sampler.get_next(batch_size)
+        batch_inds = [0] * batch_size
 
         inputs, targets, aux_vars = [], [], []
         for idx in batch_inds:
-            input, target, aux = self.get_tensors(idx)
+            input, target, aux = self.get_tensors(idx, self.patch_size)
             inputs.append(input)
             targets.append(target)
             aux_vars.append(aux)
@@ -94,10 +112,10 @@ class PINOData(deepxde.data.Data):
 
 class PINOModel(deepxde.Model):
     
-    def __init__(self, data, net, pde, batch_size=None):
+    def __init__(self, data, net, pde, patch_size=None, batch_size=None):
 
         # initialize the training data
-        data = PINOData(data, pde, batch_size)
+        data = PINOData(data, pde, patch_size, batch_size)
 
         # initialize the network weights
         #TODO net.init_weights()
