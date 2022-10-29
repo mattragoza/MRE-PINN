@@ -1,2 +1,2 @@
 from .pinn import PINN, ParallelPINN
-from .pino import PINO
+from .pino import SpectralTransformer

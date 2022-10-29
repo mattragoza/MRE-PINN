@@ -19,10 +19,12 @@ class PINOData(deepxde.data.Data):
         self.patch_size = patch_size
         self.device = device
 
-        # debugging spectral attention
-        patient = cohort[0]
-        x = patient.arrays['wave'].field.points(reshape=False)
-        patient.arrays['wave'].values[...] = np.sin(2 * np.pi * x[...,0] / 100)
+        if False:
+            # debugging spectral attention
+            patient = cohort[0]
+            x = patient.arrays['wave'].field.points(reshape=False)
+            patient.arrays['wave'].values[...] = \
+                np.sin(2 * np.pi * np.linalg.norm(x, axis=-1) / 100)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         (a, x, y), u_true = inputs, targets
