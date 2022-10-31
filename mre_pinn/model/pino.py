@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from .generic import get_activ_fn, ParallelNet
 
@@ -20,7 +21,8 @@ class SpectralTransformer(torch.nn.Module):
         n_channels_out,
         n_spatial_freqs,
         n_channels_model,
-        n_blocks,
+        n_hidden_layers,
+        n_spectral_blocks,
         activ_fn,
         omega,
         device='cuda'
@@ -32,24 +34,28 @@ class SpectralTransformer(torch.nn.Module):
             n_channels_in=n_channels_in,
             n_spatial_freqs=n_spatial_freqs,
             n_channels_out=n_channels_model,
+            n_hidden_layers=n_hidden_layers,
+            activ_fn=activ_fn,
             omega=omega,
         )
 
         self.blocks = []
-        for i in range(n_blocks):
+        for i in range(n_spectral_blocks):
             block = SpectralBlock(
                 n_channels=n_channels_model,
                 activ_fn=activ_fn,
                 device=device
             )
             self.blocks.append(block)
-            self.add_module(f'block{i}', block)
+            self.add_module(f'spectral_block{i+1}', block)
 
         self.spectral_inv = SpectralInverse(
             n_spatial_dims=n_spatial_dims,
             n_channels_in=n_channels_model,
             n_spatial_freqs=n_spatial_freqs,
             n_channels_out=n_channels_out,
+            n_hidden_layers=n_hidden_layers,
+            activ_fn=activ_fn,
             omega=omega
         )
         self.regularizer = None
@@ -79,11 +85,24 @@ class SpectralTransform(torch.nn.Module):
         n_channels_in,
         n_channels_out,
         n_spatial_freqs,
+        n_hidden_layers,
+        activ_fn,
         omega,
     ):
         super().__init__()
-        self.a_weights = xavier(n_channels_in, n_channels_out)
-        self.x_weights = xavier(n_spatial_dims, n_spatial_freqs, omega)
+        self.a_linear = nn.Linear(n_channels_in, n_channels_out)
+
+        self.linears = []
+        for i in range(n_hidden_layers):
+            linear = nn.Linear(n_channels_out, n_channels_out)
+            self.add_module(f'A_linear{i+1}', linear)
+            self.linears.append(linear)
+
+        self.x_linear = nn.Linear(n_spatial_dims, n_spatial_freqs)
+        with torch.no_grad():
+            self.x_linear.weight *= omega
+
+        self.activ_fn = get_activ_fn(activ_fn)
 
     def forward(self, a, x):
         '''
@@ -93,11 +112,16 @@ class SpectralTransform(torch.nn.Module):
         Returns:
             h: (batch_size, n_spatial_freqs, n_channels_out)
         '''
-        A = torch.einsum('bxyzi,im->bxyzm', a, self.a_weights)
-        X = torch.einsum('bxyzd,df->bxyzf', x, self.x_weights)
+        A = self.activ_fn(self.a_linear(a))
+
+        for linear in self.linears:
+            A = self.activ_fn(linear(A))
+
+        X = self.x_linear(x)
         X = torch.exp(-2j * np.pi * X)
+
         n_xyz = x.shape[1] * x.shape[2] * x.shape[3]
-        return torch.einsum('bxyzm,bxyzf->bfm', A + 0j, X) / np.sqrt(n_xyz)
+        return torch.einsum('bxyzm,bxyzf->bfm', A + 0j, X) #/ n_xyz
 
 
 class SpectralInverse(torch.nn.Module):
@@ -108,11 +132,23 @@ class SpectralInverse(torch.nn.Module):
         n_channels_in,
         n_channels_out,
         n_spatial_freqs,
+        n_hidden_layers,
+        activ_fn,
         omega,
     ):
         super().__init__()
-        self.y_weights = xavier(n_spatial_dims, n_spatial_freqs, omega)
-        self.u_weights = xavier(n_channels_in, n_channels_out)
+        self.y_linear = nn.Linear(n_spatial_dims, n_spatial_freqs)
+        with torch.no_grad():
+            self.y_linear.weight *= omega
+
+        self.linears = []
+        for i in range(n_hidden_layers):
+            linear = nn.Linear(n_channels_in, n_channels_in)
+            self.add_module(f'U_linear{i+1}', linear)
+            self.linears.append(linear)
+        self.activ_fn = get_activ_fn(activ_fn)
+
+        self.u_linear = nn.Linear(n_channels_in, n_channels_out)
 
     def forward(self, h, y):
         '''
@@ -122,11 +158,17 @@ class SpectralInverse(torch.nn.Module):
         Returns:
             u: (batch_size, n_x, n_y, n_z, n_channels_out)
         '''
-        Y = torch.einsum('bxyzd,df->bxyzf', y, self.y_weights)
+        Y = self.y_linear(y)
         Y = torch.exp(2j * np.pi * Y)
+
         n_xyz = y.shape[1] * y.shape[2] * y.shape[3]
-        U = torch.einsum('bfm,bxyzf->bxyzm', h, Y).real / np.sqrt(n_xyz)
-        return torch.einsum('bxyzm,mo->bxyzo', U, self.u_weights)
+        U = torch.einsum('bfm,bxyzf->bxyzm', h, Y).real / n_xyz
+        U = self.activ_fn(U)
+
+        for linear in self.linears:
+            U = self.activ_fn(linear(U))
+
+        return self.u_linear(U)
 
 
 class SpectralBlock(torch.nn.Module):
@@ -142,7 +184,6 @@ class SpectralBlock(torch.nn.Module):
             n_channels, n_channels, device=device, dtype=torch.complex64
         )
         self.activ_fn = get_activ_fn(activ_fn)
-        self.regularizer = None
 
     def forward(self, h):
         '''
