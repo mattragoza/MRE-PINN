@@ -130,6 +130,7 @@ class PINOModel(deepxde.Model):
         u_pred = self.predict(*inputs)
 
         # get ground truth xarrays
+        a = self.data.cohort[inds[0]].arrays['t1_pre_in']
         u_true = self.data.cohort[inds[0]].arrays['wave']
         mu_true = self.data.cohort[inds[0]].arrays['mre']
 
@@ -137,9 +138,15 @@ class PINOModel(deepxde.Model):
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)
         
         # combine xarrays into single xarray
+
+        a_vars = ['a_pred', 'a_diff', 'a_true']
+        a_dim = xr.DataArray(a_vars, dims=['variable'])
+        a = xr.concat([a * 0, a, a], dim=a_dim)
+        a.name = 'anatomy'
+
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])
         u = xr.concat([u_pred, u_true - u_pred, u_true], dim=u_dim)
         u.name = 'wave field'
 
-        return u,
+        return a, u
