@@ -55,6 +55,27 @@ class PatientCohort(object):
             self.patient_ids = patient_ids
             self.patients = patients
 
+    @classmethod
+    def from_file(
+        cls,
+        data_file,
+        nifti_dirs='/ocean/projects/asc170022p/shared/Data/MRE/*/NIFTI',
+        xarray_dir='data/NAFLD'
+    ):
+        with open(data_file) as f:
+            patient_ids = [line.split()[0] for line in f]
+        patient_ids = '{' + ','.join(patient_ids) + '}'
+        return cls(nifti_dirs, patient_ids, xarray_dir=xarray_dir)
+
+    def to_file(self, data_file):
+        with open(data_file, 'w') as f:
+            for pid in sorted(self.patient_ids):
+                line = str(pid)
+                for seq in self.patients[pid].arrays:
+                    line += ' ' + str(seq)
+                line += '\n'
+                f.write(line)
+
     def find_patients(self, pattern='*', sequences='*'):
         '''
         Find patients that match a glob pattern
