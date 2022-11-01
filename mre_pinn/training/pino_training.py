@@ -77,7 +77,7 @@ class PINOData(deepxde.data.Data):
 
         return (a, x, y), u, (mu, mu * 0)
 
-    def train_next_batch(self, batch_size=None):
+    def train_next_batch(self, batch_size=None, return_inds=False):
         '''
         Args:
             batch_size: Number of patients in batch.
@@ -87,10 +87,7 @@ class PINOData(deepxde.data.Data):
             aux_vars: Tuple of auxiliary tensors.
         '''
         batch_size = batch_size or self.batch_size
-
-        # patch sampling debugging
-        #batch_inds = self.batch_sampler.get_next(batch_size)
-        batch_inds = [0] * batch_size
+        batch_inds = self.batch_sampler.get_next(batch_size)
 
         inputs, targets, aux_vars = [], [], []
         for idx in batch_inds:
@@ -102,14 +99,13 @@ class PINOData(deepxde.data.Data):
         inputs = tuple(torch.stack(x) for x in zip(*inputs))
         targets = torch.stack(targets)
         aux_vars = tuple(torch.stack(x) for x in zip(*aux_vars))
-        return inputs, targets, aux_vars
+        if return_inds:
+            return inputs, targets, aux_vars, batch_inds
+        else:
+            return inputs, targets, aux_vars
 
-    def test(self):
-        inputs, targets, aux_vars = self.get_tensors(0)
-        inputs = tuple(x.unsqueeze(0) for x in inputs)
-        targets = targets.unsqueeze(0)
-        aux_vars = tuple(x.unsqueeze(0) for x in aux_vars)
-        return inputs, targets, aux_vars
+    def test(self, return_inds=False):
+        return self.train_next_batch(batch_size=1, return_inds=return_inds)
 
 
 class PINOModel(deepxde.Model):
@@ -129,15 +125,18 @@ class PINOModel(deepxde.Model):
 
     def test(self):
         
-        # get ground truth and model predictions
-        inputs, targets, aux_vars = self.data.test()
+        # get model predictions as tensors
+        inputs, targets, aux_vars, inds = self.data.test(return_inds=True)
         u_pred = self.predict(*inputs)
 
-        # convert tensors to xarrays
-        u_true = self.data.cohort[0].arrays['wave']
-        mu_true = self.data.cohort[0].arrays['mre']
+        # get ground truth xarrays
+        u_true = self.data.cohort[inds[0]].arrays['wave']
+        mu_true = self.data.cohort[inds[0]].arrays['mre']
+
+        # convert predicted tensors to xarrays
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)
         
+        # combine xarrays into single xarray
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])
         u = xr.concat([u_pred, u_true - u_pred, u_true], dim=u_dim)

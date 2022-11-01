@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+torch.backends.cudnn.enabled = False
 from torch import nn
 from torch.nn import functional as F
 
@@ -21,7 +22,7 @@ class SpectralTransformer(torch.nn.Module):
         n_channels_out,
         n_spatial_freqs,
         n_channels_model,
-        n_hidden_layers,
+        n_conv_blocks,
         n_spectral_blocks,
         activ_fn,
         omega,
@@ -34,7 +35,7 @@ class SpectralTransformer(torch.nn.Module):
             n_channels_in=n_channels_in,
             n_spatial_freqs=n_spatial_freqs,
             n_channels_out=n_channels_model,
-            n_hidden_layers=n_hidden_layers,
+            n_conv_blocks=n_conv_blocks,
             activ_fn=activ_fn,
             omega=omega,
         )
@@ -54,7 +55,7 @@ class SpectralTransformer(torch.nn.Module):
             n_channels_in=n_channels_model,
             n_spatial_freqs=n_spatial_freqs,
             n_channels_out=n_channels_out,
-            n_hidden_layers=n_hidden_layers,
+            n_conv_blocks=n_conv_blocks,
             activ_fn=activ_fn,
             omega=omega
         )
@@ -85,24 +86,26 @@ class SpectralTransform(torch.nn.Module):
         n_channels_in,
         n_channels_out,
         n_spatial_freqs,
-        n_hidden_layers,
+        n_conv_blocks,
         activ_fn,
         omega,
     ):
         super().__init__()
         self.a_linear = nn.Linear(n_channels_in, n_channels_out)
 
-        self.linears = []
-        for i in range(n_hidden_layers):
-            linear = nn.Linear(n_channels_out, n_channels_out)
-            self.add_module(f'A_linear{i+1}', linear)
-            self.linears.append(linear)
+        self.blocks = []
+        for i in range(n_conv_blocks):
+            block = ConvBlock(
+                n_channels_in=n_channels_out,
+                n_channels_out=n_channels_out,
+                activ_fn=activ_fn,
+            )
+            self.add_module(f'conv_block{i+1}', block)
+            self.blocks.append(block)
 
         self.x_linear = nn.Linear(n_spatial_dims, n_spatial_freqs)
         with torch.no_grad():
             self.x_linear.weight *= omega
-
-        self.activ_fn = get_activ_fn(activ_fn)
 
     def forward(self, a, x):
         '''
@@ -112,16 +115,34 @@ class SpectralTransform(torch.nn.Module):
         Returns:
             h: (batch_size, n_spatial_freqs, n_channels_out)
         '''
-        A = self.activ_fn(self.a_linear(a))
+        A = self.a_linear(a)
 
-        for linear in self.linears:
-            A = self.activ_fn(linear(A))
+        A = torch.permute(A, (0, 4, 1, 2, 3))
+        x = torch.permute(x, (0, 4, 1, 2, 3))
+        for block in self.blocks:
+            A = block.forward(A)
+            x = block.pool(x)
+        A = torch.permute(A, (0, 2, 3, 4, 1))
+        x = torch.permute(x, (0, 2, 3, 4, 1))
 
         X = self.x_linear(x)
         X = torch.exp(-2j * np.pi * X)
 
         n_xyz = x.shape[1] * x.shape[2] * x.shape[3]
         return torch.einsum('bxyzm,bxyzf->bfm', A + 0j, X) #/ n_xyz
+
+
+class ConvBlock(torch.nn.Module):
+
+    def __init__(self, n_channels_in, n_channels_out, activ_fn):
+        super().__init__()
+        self.conv = nn.Conv3d(n_channels_in, n_channels_out, kernel_size=3, padding=1)
+        self.pool = nn.AvgPool3d(kernel_size=2, stride=2)
+        self.activ_fn = get_activ_fn(activ_fn)
+
+    def forward(self, h):
+        g = self.activ_fn(self.conv(h))
+        return self.pool(g)
 
 
 class SpectralInverse(torch.nn.Module):
@@ -132,7 +153,7 @@ class SpectralInverse(torch.nn.Module):
         n_channels_in,
         n_channels_out,
         n_spatial_freqs,
-        n_hidden_layers,
+        n_conv_blocks,
         activ_fn,
         omega,
     ):
@@ -141,12 +162,15 @@ class SpectralInverse(torch.nn.Module):
         with torch.no_grad():
             self.y_linear.weight *= omega
 
-        self.linears = []
-        for i in range(n_hidden_layers):
-            linear = nn.Linear(n_channels_in, n_channels_in)
-            self.add_module(f'U_linear{i+1}', linear)
-            self.linears.append(linear)
-        self.activ_fn = get_activ_fn(activ_fn)
+        self.blocks = []
+        for i in range(n_conv_blocks):
+            block = TConvBlock(
+                n_channels_in=n_channels_in,
+                n_channels_out=n_channels_in,
+                activ_fn=activ_fn
+            )
+            self.add_module(f'tconv_block{i+1}', block)
+            self.blocks.append(block)
 
         self.u_linear = nn.Linear(n_channels_in, n_channels_out)
 
@@ -158,17 +182,43 @@ class SpectralInverse(torch.nn.Module):
         Returns:
             u: (batch_size, n_x, n_y, n_z, n_channels_out)
         '''
+        #print('  SpectralInverse')
+        #print('  h', h.shape, h.dtype)
+        #print('  y', y.shape, y.dtype)
+
+        y = torch.permute(y, (0, 4, 1, 2, 3))
+        for block in self.blocks:
+            y = block.pool(y)
+        y = torch.permute(y, (0, 2, 3, 4, 1))
+
         Y = self.y_linear(y)
         Y = torch.exp(2j * np.pi * Y)
 
         n_xyz = y.shape[1] * y.shape[2] * y.shape[3]
         U = torch.einsum('bfm,bxyzf->bxyzm', h, Y).real / n_xyz
-        U = self.activ_fn(U)
 
-        for linear in self.linears:
-            U = self.activ_fn(linear(U))
+        U = torch.permute(U, (0, 4, 1, 2, 3))
+        for block in self.blocks:
+            U = block.forward(U)
+        U = torch.permute(U, (0, 2, 3, 4, 1))
 
         return self.u_linear(U)
+
+
+class TConvBlock(torch.nn.Module):
+
+    def __init__(self, n_channels_in, n_channels_out, activ_fn):
+        super().__init__()
+        self.pool = nn.AvgPool3d(kernel_size=2, stride=2)
+        self.tconv = nn.ConvTranspose3d(
+            n_channels_in, n_channels_out, kernel_size=3, padding=1
+        )
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.activ_fn = get_activ_fn(activ_fn)
+
+    def forward(self, h):
+        g = self.activ_fn(self.tconv(h))
+        return self.upsample(g)
 
 
 class SpectralBlock(torch.nn.Module):
