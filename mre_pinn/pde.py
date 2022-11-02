@@ -155,71 +155,90 @@ class DebugEquation(WaveEquation):
 
 def complex_operator(f):
     @wraps(f)
-    def wrapper(u, x, dim=0):
+    def wrapper(u, x, *args, **kwargs):
         if u.dtype.is_complex:
-            real = f(u.real, x, dim)
-            imag = f(u.imag, x, dim)
-            return real + 1j * imag
+            f_real = f(u.real, x, *args, **kwargs)
+            f_imag = f(u.imag, x, *args, **kwargs)
+            return f_real + 1j * f_imag
         else:
-            return f(u, x, dim)
+            return f(u, x, *args, **kwargs)
     return wrapper
 
 
 @complex_operator
-def jacobian(u, x, dim=0):
+def gradient(u, x):
     '''
-    Args:
-        u: (N, M) output tensor.
-        x: (N, K) input tensor.
-    Returns:
-        J: (N, M, K) Jacobian tensor.
-    '''
-    components = []
-    for i in range(u.shape[1]):
-        component = deepxde.grad.jacobian(u, x, i)[:,dim:]
-        components.append(component)
-    return torch.stack(components, dim=1)
-
-
-@complex_operator
-def divergence(u, x, dim=0):
-    '''
-    Trace of the Jacobian matrix.
+    Continuous gradient operator, which maps a
+    scalar field to a vector field of partial
+    derivatives.
 
     Args:
-        y: (N, M, K) output tensor.
-        x: (N, K) input tensor.
+        u: (..., 1) output tensor.
+        x: (..., K) input tensor.
     Returns:
-        div: (N, M) divergence tensor.
+        D: (..., K) gradient tensor, where:
+            D[...,i] = ∂u[...,0] / ∂x[...,i]
     '''
-    components = []
-    for i in range(u.shape[1]):
-        component = 0
-        for j in range(u.shape[2]):
-            component += deepxde.grad.jacobian(u[:,i], x, j, dim+j)
-        components.append(component)
-    return torch.cat(components, dim=1)
+    ones = torch.ones_like(u)
+    return torch.autograd.grad(u, x, grad_outputs=ones, create_graph=True)[0]
 
 
-@complex_operator
-def laplacian(u, x, dim=0):
+def jacobian(u, x):
     '''
-    Continuous Laplacian operator,
-    which is the divergence of the
-    gradient.
+    Continuous Jacobian operator. The Jacobian
+    is the gradient operator for vector fields.
+    It maps a vector field to a tensor field of
+    partial derivatives.
 
     Args:
-        u: (N, M) output tensor.
-        x: (N, K) input tensor.
-        dim: Summation start index.
+        u: (..., M) output tensor.
+        x: (..., K) input tensor.
     Returns:
-        L: (N, M) Laplacian tensor.
+        J: (..., M, K) Jacobian tensor, where:
+            J[...,i,j] = ∂u[...,i] / ∂x[...,j]
     '''
     components = []
-    for i in range(u.shape[1]):
-        i = i if u.shape[1] > 1 else None
-        component = 0
-        for j in range(dim, x.shape[1]):
-            component += deepxde.grad.hessian(u, x, i, j, j)
+    for i in range(u.shape[-1]):
+        component = gradient(u[...,i:i+1], x)
         components.append(component)
-    return torch.cat(components, dim=1)
+    return torch.stack(components, dim=-2)
+
+
+def divergence(u, x):
+    '''
+    Continuous tensor divergence operator.
+    Divergence is the trace of the Jacobian,
+    and maps a tensor field to vector field.
+
+    Args:
+        u: (..., M, K) output tensor.
+        x: (..., K) input tensor.
+    Returns:
+        V: (..., M) divergence tensor, where:
+            V[...,i] = ∑ⱼ ∂u[...,i,j] / ∂x[...,j]
+    '''
+    components = []
+    for i in range(u.shape[-2]):
+        J = jacobian(u[...,i,:], x)
+        component =  0
+        for j in range(u.shape[-1]):
+            component += J[...,j,j]
+        components.append(component)
+    return torch.stack(components, dim=-1)
+
+
+def laplacian(u, x):
+    '''
+    Continuous vector Laplacian operator.
+    The Laplacian is the divergence of the
+    gradient, and maps a vector field to
+    a vector field.
+
+    Args:
+        u: (..., M) output tensor.
+        x: (..., K) input tensor.
+    Returns:
+        L: (..., M) Laplacian tensor, where:
+            L[...,i] = ∑ⱼ ∂²u[...,i] / ∂x[...,j]²
+    '''
+    return divergence(jacobian(u, x), x)

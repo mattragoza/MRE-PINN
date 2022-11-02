@@ -121,21 +121,26 @@ class PINOModel(deepxde.Model):
         super().__init__(data, net)
 
     def predict(self, a, x, y):
-        return self.net(inputs=(a, x, y))
+        y.requires_grad = True
+        u_pred = self.net(inputs=(a, x, y))
+        lu_pred = laplacian(u_pred, y)
+        return u_pred, lu_pred
 
     def test(self):
         
         # get model predictions as tensors
         inputs, targets, aux_vars, inds = self.data.test(return_inds=True)
-        u_pred = self.predict(*inputs)
+        u_pred, lu_pred = self.predict(*inputs)
 
         # get ground truth xarrays
         a = self.data.cohort[inds[0]].arrays['t1_pre_in']
         u_true = self.data.cohort[inds[0]].arrays['wave']
         mu_true = self.data.cohort[inds[0]].arrays['mre']
+        lu_true = self.data.cohort[inds[0]].arrays['Lwave']
 
         # convert predicted tensors to xarrays
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)
+        lu_pred = as_xarray(lu_pred[0,...,0], like=u_true)
         
         # combine xarrays into single xarray
 
@@ -149,4 +154,9 @@ class PINOModel(deepxde.Model):
         u = xr.concat([u_pred, u_true - u_pred, u_true], dim=u_dim)
         u.name = 'wave field'
 
-        return a, u
+        lu_vars = ['lu_pred', 'lu_diff', 'lu_true']
+        lu_dim = xr.DataArray(lu_vars, dims=['variable'])
+        lu = xr.concat([lu_pred, lu_true - lu_pred, lu_true], dim=lu_dim)
+        lu.name = 'Laplacian'
+
+        return a, u, lu

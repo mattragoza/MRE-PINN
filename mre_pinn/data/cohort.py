@@ -166,6 +166,10 @@ class PatientCohort(object):
         for pid in progress(self.patient_ids):
              self.patients[pid].load_xarrays()
 
+    def eval_baseline(self):
+        for pid in progress(self.patient_ids):
+            self.patients[pid].eval_baseline()
+
     def stack_xarrays(self):
         arrays = []
         for pid in self.patient_ids:

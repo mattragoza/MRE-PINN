@@ -75,7 +75,7 @@ def laplacian(u):
     return xr.concat(components, dim=u.component).transpose(*u.dims)
 
 
-def helmholtz_inversion(u, Lu, rho=1000, polar=False, eps=1e-8):
+def helmholtz_inversion(u, Lu, rho=1000, frequency=None, polar=False, eps=1e-8):
     '''
     Direct algebraic inversion of the Helmholtz equation.
 
@@ -89,8 +89,11 @@ def helmholtz_inversion(u, Lu, rho=1000, polar=False, eps=1e-8):
         An xarray of shear modulus values.
     '''
     axes = tuple(range(1, u.ndim))
-    omega = 2 * np.pi * u.frequency
-    omega = np.expand_dims(omega, axis=axes)
+    if frequency is None:
+        omega = 2 * np.pi * u.frequency
+        omega = np.expand_dims(omega, axis=axes)
+    else:
+        omega = 2 * np.pi * frequency
 
     if polar:
         numer_abs_G = (rho * omega**2 * np.abs(u)).sum(axis=-1)
@@ -192,14 +195,17 @@ def savgol_filter_nd(n, order=1, kernel_size=3):
 
 def savgol_smoothing(u, **kwargs):
     ndim = u.field.n_spatial_dims
+    deriv_order = (0,) * ndim
     kernels = savgol_filter_nd(ndim, **kwargs)
     Ku = xr.zeros_like(u)
-    for frequency in range(u.shape[0]):
-        for component in range(u.shape[-1]):
-            deriv_order = (0,) * ndim
-            Ku[frequency,...,component] = scipy.ndimage.convolve(
-                u[frequency,...,component], kernels[deriv_order], mode='reflect'
-            )
+    if 'frequency' in u and 'component' in u:
+        for frequency in range(u.shape[0]):
+            for component in range(u.shape[-1]):
+                Ku[frequency,...,component] = scipy.ndimage.convolve(
+                    u[frequency,...,component], kernels[deriv_order], mode='reflect'
+                )
+    else:
+        Ku[...] = scipy.ndimage.convolve(u, kernels[deriv_order], mode='reflect')
     return Ku
 
 
@@ -224,11 +230,18 @@ def savgol_laplacian(u, **kwargs):
     x_res = u.field.spatial_resolution
     kernels = savgol_filter_nd(ndim, **kwargs)
     Lu = xr.zeros_like(u)
-    for frequency in range(u.shape[0]):
-        for component in range(u.shape[-1]):
-            for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
-                deriv_order = tuple(deriv_order)
-                Lu[frequency,...,component] += scipy.ndimage.convolve(
-                    u[frequency,...,component], kernels[deriv_order], mode='reflect'
-                ) / x_res[i]**2
+    if 'frequency' in u and 'component' in u:
+        for frequency in range(u.shape[0]):
+            for component in range(u.shape[-1]):
+                for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
+                    deriv_order = tuple(deriv_order)
+                    Lu[frequency,...,component] += scipy.ndimage.convolve(
+                        u[frequency,...,component], kernels[deriv_order], mode='reflect'
+                    ) / x_res[i]**2
+    else:
+        for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
+            deriv_order = tuple(deriv_order)
+            Lu[...] += scipy.ndimage.convolve(
+                u, kernels[deriv_order], mode='reflect'
+            ) / x_res[i]**2
     return Lu

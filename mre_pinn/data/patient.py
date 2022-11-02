@@ -9,6 +9,7 @@ import torch
 from .segment import UNet3D
 from ..utils import print_if
 from ..visual import XArrayViewer
+from .. import discrete
 
 
 SEQUENCES = [
@@ -230,6 +231,15 @@ class Patient(object):
         for seq in self.sequences + ['mask']:
             nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
             self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
+
+    def eval_baseline(self):
+        u = self.arrays['wave']
+        Ku = discrete.savgol_smoothing(u, order=3, kernel_size=5)
+        Lu = discrete.savgol_laplacian(u, order=3, kernel_size=5)
+        Mu = discrete.helmholtz_inversion(Ku, Lu, frequency=80, polar=True)
+        self.arrays['Kwave'] = Ku
+        self.arrays['Lwave'] = Lu
+        self.arrays['Mwave'] = Mu
 
     def view(self, sequences=None, compare=False, downsample=1):
         if compare:
