@@ -27,9 +27,9 @@ class PINOData(deepxde.data.Data):
                 np.sin(2 * np.pi * np.linalg.norm(x, axis=-1) / 100)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        (a, x, y), u_true = inputs, targets
+        (a, x, y, mask), u_true = inputs, targets
         u_pred = outputs
-        data_loss = loss_fn(u_true, u_pred)
+        data_loss = loss_fn(u_true, u_pred, mask)
         #pde_res = self.pde(x, u_pred, mu_pred)
         pde_loss = 0 #loss_fn(0, pde_res)
         return [data_loss, data_loss]
@@ -54,6 +54,7 @@ class PINOData(deepxde.data.Data):
         y = patient.arrays['wave'].field.points(reshape=False)
         mu = patient.arrays['mre'].values[...,None]
         z = patient.arrays['mre'].field.points(reshape=False)
+        mask = patient.arrays['mre_mask'].values[...,None]
 
         if patch_size is not None: # sample patch
             n_x, n_y, n_z = y.shape[:3]
@@ -66,6 +67,7 @@ class PINOData(deepxde.data.Data):
             y = y[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             mu = mu[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             z = z[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
+            mask = mask[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
 
         # convert arrays to tensors
         a = torch.tensor(a, device=self.device, dtype=torch.float32)
@@ -74,8 +76,9 @@ class PINOData(deepxde.data.Data):
         y = torch.tensor(y, device=self.device, dtype=torch.float32)
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
         z = torch.tensor(z, device=self.device, dtype=torch.float32)
+        mask = torch.tensor(mask, device=self.device, dtype=torch.float32)
 
-        return (a, x, y), u, (mu, mu * 0)
+        return (a, x, y, mask), u, (mu, mu * 0)
 
     def train_next_batch(self, batch_size=None, return_inds=False):
         '''
@@ -99,6 +102,7 @@ class PINOData(deepxde.data.Data):
         inputs = tuple(torch.stack(x) for x in zip(*inputs))
         targets = torch.stack(targets)
         aux_vars = tuple(torch.stack(x) for x in zip(*aux_vars))
+
         if return_inds:
             return inputs, targets, aux_vars, batch_inds
         else:
@@ -120,9 +124,9 @@ class PINOModel(deepxde.Model):
 
         super().__init__(data, net)
 
-    def predict(self, a, x, y):
+    def predict(self, a, x, y, mask):
         y.requires_grad = True
-        u_pred = self.net(inputs=(a, x, y))
+        u_pred = self.net(inputs=(a, x, y, mask))
         lu_pred = laplacian(u_pred, y)
         return u_pred, lu_pred
 
@@ -133,7 +137,9 @@ class PINOModel(deepxde.Model):
         u_pred, lu_pred = self.predict(*inputs)
 
         # get ground truth xarrays
-        a = self.data.cohort[inds[0]].arrays['t1_pre_in']
+        a_mask = self.data.cohort[inds[0]].arrays['anat_mask']
+        m_mask = self.data.cohort[inds[0]].arrays['mre_mask']
+        a_true = self.data.cohort[inds[0]].arrays['t1_pre_in']
         u_true = self.data.cohort[inds[0]].arrays['wave']
         mu_true = self.data.cohort[inds[0]].arrays['mre']
         lu_true = self.data.cohort[inds[0]].arrays['Lwave']
@@ -144,9 +150,9 @@ class PINOModel(deepxde.Model):
         
         # combine xarrays into single xarray
 
-        a_vars = ['a_pred', 'a_diff', 'a_true']
+        a_vars = ['a_mask', 'a_over', 'a_true']
         a_dim = xr.DataArray(a_vars, dims=['variable'])
-        a = xr.concat([a * 0, a, a], dim=a_dim)
+        a = xr.concat([a_mask, a_mask * a_true, a_true], dim=a_dim)
         a.name = 'anatomy'
 
         u_vars = ['u_pred', 'u_diff', 'u_true']

@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-torch.backends.cudnn.enabled = False
+#torch.backends.cudnn.enabled = False
 from torch import nn
 from torch.nn import functional as F
 
@@ -66,10 +66,11 @@ class SpectralTransformer(torch.nn.Module):
             a: (batch_size, n_x, n_y, n_z, n_channels_in)
             x: (batch_size, n_x, n_y, n_z, n_spatial_dims)
             y: (batch_size, n_x, n_y, n_z, n_spatial_dims)
+            mask
         Returns:
             u: (batch_size, n_x, n_y, n_z, n_channels_out)
         '''
-        a, x, y = inputs
+        a, x, y, mask = inputs
         h = self.spectral_fwd(a, x)
         for block in self.blocks:
             h = block(h)

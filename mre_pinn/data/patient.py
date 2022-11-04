@@ -5,6 +5,7 @@ import xarray as xr
 import skimage
 import SimpleITK as sitk
 import torch
+#torch.backends.cudnn.enabled = True
 
 from .segment import UNet3D
 from ..utils import print_if
@@ -125,34 +126,45 @@ class Patient(object):
         return df
 
     def preprocess_images(self, model=None):
+
         # The order of operations warrants some explanation.
+        mre_sequences = ['mre_raw', 'wave', 'mre']
+        anat_sequences = [s for s in self.sequences if s not in mre_sequences]
 
         # Some of the MRE images have incorrect spatial metadata,
         #   so we correct them by extrapolating from the metadata
         #   of the 'mre' sequence, which seems to be correct. We
         #   assume that the MRE images all occupy the same spatial
         #   domain, i.e. same center and overall spatial extent.
-        self.correct_metadata(on=['mre_raw', 'wave'], using='mre')
+        self.correct_metadata(['mre_raw', 'wave'], using='mre')
 
         # The wave images we have are screenshots of some kind,
         #   so they are RGB images with text overlays. We convert
         #   the RGB pixels to grayscale using prior knowledge about
         #   the wave image colormap (we don't know the scale...)
-        self.restore_wave_image(wave_seq='wave', vmax=1e3)
+        self.restore_wave_image('wave', vmax=1e3)
 
         # The segmentation model accepts input size of (256, 256, 32),
-        #   so we resize the images to that size. This corresponds to
-        #   downsampling the MRI images and upsampling for MRE images,
-        #   at least in the z dimension.
-        self.resize_images(['t1_pre_out'], size=(256, 256, 32))
-        self.segment_images(mask_seq='t1_pre_out', model=model)
+        #   so we resize the main anatomic image to that size before
+        #   providing it as input to the segmentation model. First, we
+        #   register the main anatomic image to mre_raw so that the 
+        #   mask is aligned and we can then aligned the other images.
+        main_anat_seq = 't1_pre_out'
+        self.register_images([main_anat_seq], fixed='mre_raw', resize=False)
+        self.resize_images([main_anat_seq], size=(256, 256, 32))
+        self.segment_image(main_anat_seq, model=model)
+        self.register_images(['mre_mask'], fixed='mre_raw', resize=True)
+        self.sequences = self.sequences + ['anat_mask', 'mre_mask']
 
-        self.register_images(mask_seq='t1_pre_out')
+        # Then we register all of the remaining anatomic images to the
+        #   main anatomic image, so all images should now be aligned.
+        self.register_images(anat_sequences, fixed=main_anat_seq, resize=True)
 
-        mre_sequences = ['mre_raw', 'wave', 'mre']
-        anat_sequences = [s for s in self.sequences if s not in mre_sequences]
-        self.resize_images(anat_sequences, size=(256, 256, 16))
-        self.resize_images(mre_sequences, size=(256, 256, 4))
+        self.resize_images(anat_sequences + ['anat_mask'], size=(256, 256, 16))
+        self.resize_images(mre_sequences + ['mre_mask'], size=(256, 256, 4))
+
+        self.correct_metadata(anat_sequences + ['anat_mask'], using='t1_pre_in')
+        self.correct_metadata(mre_sequences + ['mre_mask'], using='mre')
 
     def correct_metadata(self, on, using):
         ref_image = self.images[using]
@@ -166,41 +178,38 @@ class Patient(object):
 
     def resize_images(self, sequences, size):
         for seq in sequences:
-            image = self.images[seq]
-            self.images[seq] = resize_image(image, size, self.verbose)
+            self.images[seq] = resize_image(self.images[seq], size, self.verbose)
 
-    def center_images(self):
-        pass # TODO
-
-    def segment_images(self, mask_seq, model):
-        self.images['mask'] = segment_image(
-            self.images[mask_seq], model, self.verbose
+    def segment_image(self, input_seq, model):
+        mask = segment_image(
+            self.images[input_seq], model, self.verbose
         )
+        self.images['anat_mask'] = mask
+        self.images['mre_mask'] = mask
 
-    def register_images(self, mask_seq):
-        fixed_image = self.images['mre_raw']
-        for seq, moving_image in self.images.items():
-            if seq in {'mre_raw', 'mre_phase', 'wave', 'mre', 'mask'}:
-                continue
-            transform = 'rigid'
-            self.images[seq], transform_params = register_image(
-                moving_image, fixed_image, transform, self.verbose
+    def register_images(self, moving, fixed, resize=False):
+        fixed_image = self.images[fixed]
+        transforms = []
+        for moving_seq in moving:
+            moving_image = self.images[moving_seq]
+            self.images[moving_seq], transform = register_image(
+                moving_image, fixed_image,
+                transform='rigid', resize=resize, verbose=self.verbose
             )
-            if seq == mask_seq:
-                mask_params = transform_params
-        if 'mask' in self.images:
-            self.images['mask'] = transform_image(
-                self.images['mask'], mask_params, self.verbose
-            )
+            transforms.append(transform)
+        return transforms
+
+    def transform_image(self, seq, transform):
+        self.images[seq] = transform_image(self.images[seq], transform, self.verbose)
 
     def convert_images(self):
         self.arrays = {}
         for seq, image in self.images.items():
             self.arrays[seq] = convert_to_xarray(image, self.verbose)
 
-    def stack_xarrays(self, normalize=False, downsample=1):
+    def stack_xarrays(self, sequences, normalize=False, downsample=1):
         arrays = []
-        for seq in self.sequences:
+        for seq in sequences:
             array = self.arrays[seq]
             if normalize:
                 a_min = np.percentile(array, 1)
@@ -214,7 +223,7 @@ class Patient(object):
                         x=downsample, y=downsample, z=downsample
                     ).mean()
             arrays.append(array)
-        dim = xr.DataArray(self.sequences, dims=['sequence'])
+        dim = xr.DataArray(sequences, dims=['sequence'])
         array = xr.concat(arrays, dim=dim)
         return array.transpose('sequence', 'x', 'y', 'z')
 
@@ -228,7 +237,7 @@ class Patient(object):
 
     def load_xarrays(self):
         self.arrays = {}
-        for seq in self.sequences + ['mask']:
+        for seq in self.sequences + ['anat_mask', 'mre_mask']:
             nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
             self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
 
@@ -242,11 +251,14 @@ class Patient(object):
         self.arrays['Mwave'] = Mu
 
     def view(self, sequences=None, compare=False, downsample=1):
+        sequences = sequences or self.sequences
         if compare:
-            array = self.stack_xarrays(normalize=True, downsample=downsample)
+            array = self.stack_xarrays(
+                sequences, normalize=True, downsample=downsample
+            )
             viewer = XArrayViewer(array)
         else:
-            for seq in sequences or self.sequences:
+            for seq in sequences:
                 viewer = XArrayViewer(self.arrays[seq])
 
 
@@ -346,7 +358,9 @@ def resize_image(image, out_size, verbose=True):
     return resized_image
 
 
-def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
+def register_image(
+    moving_image, fixed_image, transform='rigid', resize=False, verbose=True
+):
     if verbose:
         moving_name = moving_image.GetMetaData('name')
         fixed_name = fixed_image.GetMetaData('name')
@@ -354,6 +368,10 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
 
     # perform registration
     reg_params = sitk.GetDefaultParameterMap(transform)
+    if 'mask' in moving_name:
+        reg_params['ResampleInterpolator'] = [
+            'FinalNearestNeighborInterpolator'
+        ]
     reg_filter = sitk.ElastixImageFilter()
     reg_filter.SetFixedImage(fixed_image)
     reg_filter.SetMovingImage(moving_image)
@@ -388,9 +406,11 @@ def register_image(moving_image, fixed_image, transform='rigid', verbose=True):
         sitk.PrintParameterMap(transform_params)
         sys.stdout.flush()
 
-    #aligned_image = reg_filter.GetResultImage()
-    #aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
-    aligned_image = transform_image(moving_image, transform_params, verbose)
+    if resize:
+        aligned_image = reg_filter.GetResultImage()
+        aligned_image.SetMetaData('name', moving_image.GetMetaData('name'))
+    else:
+        aligned_image = transform_image(moving_image, transform_params, verbose)
     return aligned_image, transform_params
 
 

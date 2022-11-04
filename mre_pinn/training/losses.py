@@ -20,7 +20,7 @@ def standardized_msae_loss_fn(y):
     return loss_fn
 
 
-def msae_loss(y_true, y_pred):
+def msae_loss(y_true, y_pred, mask):
     return torch.mean(
-        torch.abs(y_true - y_pred)**2
+        torch.abs((y_true - y_pred) * mask)**2
     )
