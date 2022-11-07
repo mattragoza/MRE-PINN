@@ -27,12 +27,14 @@ class PINOData(deepxde.data.Data):
                 np.sin(2 * np.pi * np.linalg.norm(x, axis=-1) / 100)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        (a, x, y, mask), u_true = inputs, targets
+        a, x, y = inputs
+        u_true, mu_true, mask = torch.split(targets, 1, dim=-1)
         u_pred, mu_pred = outputs
-        data_loss = loss_fn(u_true, u_pred, mask)
+        u_loss = loss_fn(u_true, u_pred, mask)
+        mu_loss = loss_fn(mu_true, mu_pred, mask)
         pde_res = self.pde(y, u_pred, mu_pred)
         pde_loss = loss_fn(0, pde_res, mask)
-        return [data_loss, pde_loss]
+        return [u_loss, mu_loss, pde_loss]
 
     def get_tensors(self, idx, patch_size=None):
         '''
@@ -78,7 +80,7 @@ class PINOData(deepxde.data.Data):
         z = torch.tensor(z, device=self.device, dtype=torch.float32)
         mask = torch.tensor(mask, device=self.device, dtype=torch.float32)
 
-        return (a, x, y, mask), u, (mu, mu * 0)
+        return (a, x, y), torch.cat([u, mu, mask], dim=-1), ()
 
     def train_next_batch(self, batch_size=None, return_inds=False):
         '''
@@ -124,9 +126,9 @@ class PINOModel(deepxde.Model):
 
         super().__init__(data, net)
 
-    def predict(self, a, x, y, mask):
+    def predict(self, a, x, y):
         y.requires_grad = True
-        u_pred, mu_pred = self.net(inputs=(a, x, y, mask))
+        u_pred, mu_pred = self.net(inputs=(a, x, y))
         lu_pred = laplacian(u_pred, y)
         return u_pred, lu_pred, mu_pred
 

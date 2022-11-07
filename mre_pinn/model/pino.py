@@ -66,11 +66,10 @@ class SpectralOperator(torch.nn.Module):
             a: (batch_size, n_x, n_y, n_z, n_channels_in)
             x: (batch_size, n_x, n_y, n_z, n_spatial_dims)
             y: (batch_size, n_x, n_y, n_z, n_spatial_dims)
-            mask
         Returns:
             u: (batch_size, n_x, n_y, n_z, n_channels_out)
         '''
-        a, x, y, mask = inputs
+        a, x, y = inputs
         h = self.a_net(a, x)
         u = self.u_net(h, y)
         mu = self.mu_net(h, y)
@@ -167,8 +166,6 @@ class SpectralDecoder(torch.nn.Module):
 
         self.h_linear = nn.Linear(n_channels_in, n_spatial_freqs)
 
-        self.U_linear = nn.Linear(n_spatial_freqs, n_spatial_freqs)
-
         self.u_linear = nn.Linear(n_spatial_freqs, n_channels_out)
         self.activ_fn = get_activ_fn(activ_fn)
 
@@ -190,7 +187,4 @@ class SpectralDecoder(torch.nn.Module):
         U = U / (y.shape[1] * y.shape[2] * y.shape[3])
         U = self.activ_fn(U)
 
-        U = self.U_linear(U)
-        U = self.activ_fn(U)
-   
         return self.u_linear(U)
