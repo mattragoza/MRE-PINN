@@ -99,7 +99,7 @@ class WaveEquation(object):
 class HelmholtzEquation(WaveEquation):
 
     def traction_forces(self, x, u, mu):
-        laplace_u = laplacian(u, x, dim=1)
+        laplace_u = laplacian(u, x)
         if self.detach:
             laplace_u = laplace_u.detach()
         return mu * laplace_u
@@ -122,7 +122,7 @@ class HeteroEquation(WaveEquation):
             grad_u = grad_u.detach()
             div_grad_u = div_grad_u.detach()
 
-        grad_mu = jacobian(mu, x, dim=1)
+        grad_mu = jacobian(mu, x)
 
         return mu * div_grad_u + (grad_mu * grad_u).sum(dim=1)
 
