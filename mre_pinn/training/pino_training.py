@@ -27,14 +27,14 @@ class PINOData(deepxde.data.Data):
                 np.sin(2 * np.pi * np.linalg.norm(x, axis=-1) / 100)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        a, x, y = inputs
+        a, x = inputs
         u_true, mu_true, mask = torch.split(targets, 1, dim=-1)
         u_pred, mu_pred = outputs
         u_loss = loss_fn(u_true, u_pred, mask)
         mu_loss = loss_fn(mu_true, mu_pred, mask)
-        pde_res = self.pde(y, u_pred, mu_pred)
-        pde_loss = loss_fn(0, pde_res, mask)
-        return [u_loss, mu_loss, pde_loss]
+        #pde_res = self.pde(x, u_pred, mu_pred)
+        #pde_loss = loss_fn(0, pde_res, mask)
+        return [u_loss, mu_loss]
 
     def get_tensors(self, idx, patch_size=None):
         '''
@@ -51,11 +51,9 @@ class PINOData(deepxde.data.Data):
         ]
         a_arrays = [patient.arrays[seq].values for seq in a_sequences]
         a = np.stack(a_arrays, axis=-1)
-        x = patient.arrays['t1_pre_in'].field.points(reshape=False)
+        x = patient.arrays['wave'].field.points(reshape=False)
         u = patient.arrays['wave'].values[...,None]
-        y = patient.arrays['wave'].field.points(reshape=False)
         mu = patient.arrays['mre'].values[...,None]
-        z = patient.arrays['mre'].field.points(reshape=False)
         mask = patient.arrays['mre_mask'].values[...,None]
 
         if patch_size is not None: # sample patch
@@ -66,21 +64,17 @@ class PINOData(deepxde.data.Data):
             a = a[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             x = x[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             u = u[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            y = y[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             mu = mu[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            z = z[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
             mask = mask[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
 
         # convert arrays to tensors
         a = torch.tensor(a, device=self.device, dtype=torch.float32)
         x = torch.tensor(x, device=self.device, dtype=torch.float32)
         u = torch.tensor(u, device=self.device, dtype=torch.float32)
-        y = torch.tensor(y, device=self.device, dtype=torch.float32)
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
-        z = torch.tensor(z, device=self.device, dtype=torch.float32)
         mask = torch.tensor(mask, device=self.device, dtype=torch.float32)
 
-        return (a, x, y), torch.cat([u, mu, mask], dim=-1), ()
+        return (a, x), torch.cat([u, mu, mask], dim=-1), ()
 
     def train_next_batch(self, batch_size=None, return_inds=False):
         '''
@@ -126,10 +120,10 @@ class PINOModel(deepxde.Model):
 
         super().__init__(data, net)
 
-    def predict(self, a, x, y):
-        y.requires_grad = True
-        u_pred, mu_pred = self.net(inputs=(a, x, y))
-        lu_pred = laplacian(u_pred, y)
+    def predict(self, a, x):
+        x.requires_grad = True
+        u_pred, mu_pred = self.net(inputs=(a, x))
+        lu_pred = u_pred * 0 #laplacian(u_pred, x)
         return u_pred, lu_pred, mu_pred
 
     def test(self):
