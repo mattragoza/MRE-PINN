@@ -13,6 +13,237 @@ def xavier(fan_in, fan_out, gain=1, c=6):
     return nn.Parameter((2 * w - 1) * scale)
 
 
+def printt(**kwargs):
+    '''
+    Print tensor info.
+    '''
+    for key, val in kwargs.items():
+        print(f'{key}\t{val.shape}\t{val.dtype}')
+
+
+def describe(**kwargs):
+    for key, val in kwargs.items():
+        print(f'{key}\t{val.mean()}\t{val.std()}')
+
+
+
+class HyperCNN(torch.nn.Module):
+
+    def __init__(
+        self,
+        n_channels_in,
+        n_channels_block,
+        n_conv_per_block,
+        n_conv_blocks,
+        activ_fn,
+        n_latent,
+        n_spatial_freqs,
+        u_omega,
+        u_scale,
+        mu_omega,
+        mu_scale,
+        width_factor=1,
+        width_term=0,
+        depth_factor=1,
+        depth_term=0,
+        skip_connect=True,
+        dense=True
+    ):
+        super().__init__()
+
+        self.cnn = CNN(
+            n_channels_in=n_channels_in,
+            n_channels_block=n_channels_block,
+            n_conv_per_block=n_conv_per_block,
+            n_conv_blocks=n_conv_blocks,
+            activ_fn=activ_fn,
+            n_output=n_latent,
+            width_factor=width_factor,
+            width_term=width_term,
+            depth_factor=depth_factor,
+            depth_term=depth_term,
+            skip_connect=skip_connect
+        )
+        self.norm = nn.LayerNorm(n_latent)
+        self.u_pinn = HyperPINN(
+            n_latent=n_latent,
+            n_spatial_freqs=n_spatial_freqs,
+            omega=u_omega,
+            scale=u_scale,
+            dense=dense
+        )
+        self.mu_pinn = HyperPINN(
+            n_latent=n_latent,
+            n_spatial_freqs=n_spatial_freqs,
+            omega=mu_omega,
+            scale=mu_scale,
+            dense=dense
+        )
+        self.regularizer = None
+
+    def forward(self, inputs, debug=False):
+        a, x = inputs
+        h = self.cnn(a)
+        h = self.norm(h)
+        if debug:
+            describe(h=h)
+        h = torch.tanh(h)
+        u = self.u_pinn(h, x)
+        mu = torch.nn.functional.elu(self.mu_pinn(h, x))
+        return u, mu
+
+
+class CNN(torch.nn.Module):
+    '''
+    Convolutional neural network.
+    '''
+    def __init__(
+        self,
+        n_channels_in,
+        n_channels_block,
+        n_conv_per_block,
+        n_conv_blocks,
+        activ_fn,
+        n_output,
+        width_factor=1,
+        width_term=0,
+        depth_factor=1,
+        depth_term=0,
+        skip_connect=True,
+        debug=False
+    ):
+        super().__init__()
+        xyz_shape = np.array([256, 256, 16])
+
+        self.conv_in = nn.Conv3d(
+            in_channels=n_channels_in,
+            out_channels=n_channels_block,
+            kernel_size=1
+        )
+        n_channels_in = n_channels_block
+        if debug:
+            print(xyz_shape)
+
+        self.blocks = []
+        self.pools = []
+        for i in range(n_conv_blocks):
+
+            block = ConvBlock(
+                n_channels_in=n_channels_in,
+                n_channels_block=n_channels_block,
+                n_channels_out=n_channels_block,
+                n_conv_layers=n_conv_per_block,
+                activ_fn=activ_fn
+            )
+            self.blocks.append(block)
+            self.add_module(f'conv_block{i}', block)
+
+            if skip_connect:
+                n_channels_in = n_channels_block + n_channels_in
+            else:
+                n_channels_in = n_channels_block
+
+            n_channels_block = n_channels_block * width_factor + width_term
+            n_conv_per_block = n_conv_per_block * depth_factor + depth_term
+
+            if i < 4: # pool x,y,z
+                pool = nn.AvgPool3d(kernel_size=2, stride=2)
+                xyz_shape //= 2
+            elif i < 8: # pool x,y
+                pool = nn.AvgPool3d(kernel_size=(2, 2, 1), stride=(2, 2, 1))
+                xyz_shape //= (2, 2, 1)
+            else: # no pooling
+                pool = nn.Identity()
+
+            if debug:
+                print(xyz_shape)
+
+            self.pools.append(pool)
+            self.add_module(f'pool{i}', pool)
+
+        self.linear_out = nn.Linear(
+            in_features=n_channels_in * np.prod(xyz_shape),
+            out_features=n_output
+        )
+        self.skip_connect = skip_connect
+
+    def forward(self, a, debug=False):
+        '''
+        Args:
+            a: (batch_size, n_x, n_y, n_z, n_channels_in)
+        Returns:
+            h: (batch_size, n_output)
+        '''
+        a = torch.permute(a, (0, 4, 1, 2, 3))
+        h = self.conv_in(a)
+
+        for i, (block, pool) in enumerate(zip(self.blocks, self.pools)):
+            g = block(h)
+            if self.skip_connect:
+                g = torch.cat([h, g], dim=1)
+            h = pool(g)
+
+        h = h.reshape(h.shape[0], -1)
+        return self.linear_out(h)
+
+
+class HyperLinear(torch.nn.Module):
+    '''
+    Linear layer with parameters that are
+    conditioned on an input latent vector.
+    '''
+    def __init__(self, n_latent, n_features_in, n_features_out):
+        super().__init__()
+        self.linear_w = nn.Linear(n_latent, n_features_out * n_features_in)
+        self.linear_b = nn.Linear(n_latent, n_features_out)
+
+    def forward(self, h, x):
+        '''
+        Args:
+            h: (batch_size, n_latent)
+            x: (batch_size, n_x, n_y, n_z, n_features_in)
+        Returns:
+            y: (batch_size, n_x, n_y, n_z, n_features_out)
+        '''
+        w = self.linear_w(h)
+        b = self.linear_b(h)
+        n_features_out = b.shape[1]
+        n_features_in = w.shape[1] // n_features_out
+        w = w.reshape(-1, n_features_in, n_features_out)
+        return torch.einsum('bxyzi,bio->bxyzo', x, w) + b
+
+
+class HyperPINN(torch.nn.Module):
+
+    def __init__(self, n_latent, n_spatial_freqs, omega, scale, dense=True):
+        super().__init__()
+        if dense:
+            self.linear0 = HyperLinear(n_latent, 3, n_spatial_freqs)
+            self.linear1 = HyperLinear(n_latent, 3 + n_spatial_freqs, 1)
+        else:
+            self.linear0 = HyperLinear(n_latent, 3, n_spatial_freqs)
+            self.linear1 = HyperLinear(n_latent, n_spatial_freqs, 1)
+        self.omega = omega
+        self.scale = scale
+        self.dense = dense
+
+    def forward(self, h, x):
+        '''
+        Args:
+            h: (batch_size, n_latent)
+            x: (batch_size, n_x, n_y, n_z, 3)
+        Returns:
+            y: (batch_size, n_x, n_y, n_z, 1)
+        '''
+        x = x * self.omega
+        y = self.linear0(h, x)
+        y = torch.sin(2 * np.pi * y)
+        if self.dense:
+            y = torch.cat([x, y], dim=-1)
+        return self.linear1(h, y) * self.scale
+
+
+
 class UNet(torch.nn.Module):
 
     def __init__(
@@ -29,8 +260,7 @@ class UNet(torch.nn.Module):
         width_factor=1,
         width_term=0,
         depth_factor=1,
-        depth_term=0,
-        is_unet_block=False
+        depth_term=0
     ):
         super().__init__()
 
@@ -93,10 +323,6 @@ class UNet(torch.nn.Module):
         Args:
             a: (batch_size, n_x, n_y, n_z, n_channels_in)
             x: (batch_size, n_x, n_y, n_z, 3)
-        Hidden:
-            s: (batch_size, n_x, n_y, n_z, n_spatial_freqs)
-            U: (batch_size, n_x, n_y, n_z, 1)
-            M: (batch_size, n_x, n_y, n_z, 1)
         Returns:
             u_pred: (batch_size, n_x, n_y, n_z, 1)
             mu_pred: (batch_size, n_x, n_y, n_z, 1)
