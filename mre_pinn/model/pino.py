@@ -85,11 +85,10 @@ class HyperCNN(torch.nn.Module):
         a, x = inputs
         h = self.cnn(a)
         h = self.norm(h)
-        if debug:
-            describe(h=h)
         h = torch.tanh(h)
         u = self.u_pinn(h, x)
-        mu = torch.nn.functional.elu(self.mu_pinn(h, x))
+        mu = self.mu_pinn(h, x)
+        mu = torch.nn.functional.elu(mu)
         return u, mu
 
 
@@ -218,10 +217,10 @@ class HyperPINN(torch.nn.Module):
     def __init__(self, n_latent, n_spatial_freqs, omega, scale, dense=True):
         super().__init__()
         if dense:
-            self.linear0 = HyperLinear(n_latent, 3, n_spatial_freqs)
-            self.linear1 = HyperLinear(n_latent, 3 + n_spatial_freqs, 1)
+            self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
+            self.linear1 = HyperLinear(n_latent, 6 + n_spatial_freqs, 1)
         else:
-            self.linear0 = HyperLinear(n_latent, 3, n_spatial_freqs)
+            self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
             self.linear1 = HyperLinear(n_latent, n_spatial_freqs, 1)
         self.omega = omega
         self.scale = scale
@@ -236,10 +235,24 @@ class HyperPINN(torch.nn.Module):
             y: (batch_size, n_x, n_y, n_z, 1)
         '''
         x = x * self.omega
+
+        # cylindrical coordinates
+        x, y, z = torch.split(x, 1, dim=-1)
+        r = torch.sqrt(x**2 + y**2)
+        sin = x / (r + 1)
+        cos = y / (r + 1)
+        if self.dense:
+            x = torch.cat([x, y, z, r, sin, cos], dim=-1)
+        else:
+            x = torch.cat([z, r, sin, cos], dim=-1)
+
+        # spectral basis functions
         y = self.linear0(h, x)
         y = torch.sin(2 * np.pi * y)
         if self.dense:
             y = torch.cat([x, y], dim=-1)
+
+        # linear combination
         return self.linear1(h, y) * self.scale
 
 

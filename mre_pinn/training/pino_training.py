@@ -13,6 +13,7 @@ class PINOData(deepxde.data.Data):
     def __init__(self, cohort, pde, patch_size=None, batch_size=None, device='cuda'):
         self.cohort = cohort
         self.pde = pde
+        self.mask_level = 0.8
 
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
         self.batch_size = batch_size
@@ -30,8 +31,8 @@ class PINOData(deepxde.data.Data):
         a, x = inputs
         u_true, mu_true, mask = torch.split(targets, 1, dim=-1)
         u_pred, mu_pred = outputs[:2]
-        u_loss = loss_fn(u_true, u_pred, mask)
-        mu_loss = loss_fn(mu_true, mu_pred, mask)
+        u_loss = loss_fn(u_true, u_pred, mask, self.mask_level)
+        mu_loss = loss_fn(mu_true, mu_pred, mask, self.mask_level)
         #pde_res = self.pde(x, u_pred, mu_pred)
         #pde_loss = loss_fn(0, pde_res, mask)
         return [u_loss, mu_loss]
@@ -140,6 +141,10 @@ class PINOModel(deepxde.Model):
         mu_true = self.data.cohort[inds[0]].arrays['mre']
         lu_true = self.data.cohort[inds[0]].arrays['Lwave']
 
+        # apply mask level
+        a_mask = (a_mask - 1) * self.data.mask_level + 1
+        m_mask = (m_mask - 1) * self.data.mask_level + 1
+
         # convert predicted tensors to xarrays
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)
         lu_pred = as_xarray(lu_pred[0,...,0], like=u_true)
@@ -149,22 +154,22 @@ class PINOModel(deepxde.Model):
 
         a_vars = ['a_mask', 'a_over', 'a_true']
         a_dim = xr.DataArray(a_vars, dims=['variable'])
-        a = xr.concat([a_mask, a_mask * a_true, a_true], dim=a_dim)
+        a = xr.concat([a_mask * a_true.max(), a_mask * a_true, a_true], dim=a_dim)
         a.name = 'anatomy'
 
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])
-        u = xr.concat([u_pred, (u_true - u_pred) * m_mask, u_true], dim=u_dim)
+        u = xr.concat([u_pred * m_mask, (u_true - u_pred) * m_mask, u_true * m_mask], dim=u_dim)
         u.name = 'wave field'
 
         lu_vars = ['lu_pred', 'lu_diff', 'lu_true']
         lu_dim = xr.DataArray(lu_vars, dims=['variable'])
-        lu = xr.concat([lu_pred, (lu_true - lu_pred) * m_mask, lu_true], dim=lu_dim)
+        lu = xr.concat([lu_pred * m_mask, (lu_true - lu_pred) * m_mask, lu_true * m_mask], dim=lu_dim)
         lu.name = 'Laplacian'
 
         mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
         mu_dim = xr.DataArray(mu_vars, dims=['variable'])
-        mu = xr.concat([mu_pred, (mu_true - mu_pred) * m_mask, mu_true], dim=mu_dim)
+        mu = xr.concat([mu_pred * m_mask, (mu_true - mu_pred) * m_mask, mu_true * m_mask], dim=mu_dim)
         mu.name = 'elastogram'
 
         return a, u, lu, mu
