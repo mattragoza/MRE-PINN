@@ -23,6 +23,9 @@ class UNet(torch.nn.Module):
         n_conv_per_block,
         n_unet_blocks,
         activ_fn,
+        omega,
+        alpha,
+        skip_connect,
         width_factor=1,
         width_term=0,
         depth_factor=1,
@@ -31,7 +34,7 @@ class UNet(torch.nn.Module):
     ):
         super().__init__()
 
-        self.linear_in = nn.Conv3d(
+        self.conv_in = nn.Conv3d(
             in_channels=n_channels_in,
             out_channels=n_channels_block,
             kernel_size=1
@@ -56,10 +59,11 @@ class UNet(torch.nn.Module):
                 width_term=width_term,
                 depth_factor=depth_factor,
                 depth_term=depth_term,
-                activ_fn=activ_fn
+                activ_fn=activ_fn,
+                skip_connect=skip_connect
             )
             self.conv_block_out = ConvBlock(
-                n_channels_in=n_channels_block * 2,
+                n_channels_in=n_channels_block * (1, 2)[skip_connect],
                 n_channels_block=n_channels_block,
                 n_channels_out=n_channels_block,
                 n_conv_layers=n_conv_per_block,
@@ -68,31 +72,63 @@ class UNet(torch.nn.Module):
         else:
             self.unet_block = None
 
-        self.linear_out = nn.Conv3d(
+        self.conv_out = nn.Conv3d(
             in_channels=n_channels_block,
-            out_channels=n_channels_out * 2,
+            out_channels=n_channels_out,
             kernel_size=(1, 1, 4),
-            stride=(1, 1, 4)
+            stride=(1, 1, 4),
+            padding=(0, 0, 0)
         )
+
+        self.linear_u = nn.Linear(n_channels_out, 3 + 1 + 1)
+        self.linear_mu = nn.Linear(n_channels_out, 3 + 1 + 1)
+
+        self.omega = omega
+        self.alpha = alpha
+        self.skip_connect = skip_connect
         self.regularizer = None
 
     def forward(self, inputs):
         '''
         Args:
             a: (batch_size, n_x, n_y, n_z, n_channels_in)
+            x: (batch_size, n_x, n_y, n_z, 3)
+        Hidden:
+            s: (batch_size, n_x, n_y, n_z, n_spatial_freqs)
+            U: (batch_size, n_x, n_y, n_z, 1)
+            M: (batch_size, n_x, n_y, n_z, 1)
         Returns:
-            h: (batch_size, n_x, n_y, n_z, n_channels_out)
+            u_pred: (batch_size, n_x, n_y, n_z, 1)
+            mu_pred: (batch_size, n_x, n_y, n_z, 1)
         '''
         a, x = inputs
+
         a = torch.permute(a, (0, 4, 1, 2, 3))
-        h = self.linear_in(a)
+        h = self.conv_in(a)
         h = self.conv_block_in(h)
+
         if self.unet_block:
-            h = torch.cat([h, self.unet_block(h)], dim=1)
+            if self.skip_connect:
+                h = torch.cat([h, self.unet_block(h)], dim=1)
+            else:
+                h = self.unet_block(h)
             h = self.conv_block_out(h)
-        h = self.linear_out(h)
-        h = torch.permute(h, (0, 2, 3, 4, 1)) + (x.mean() * 0)
-        return torch.split(h, 1, dim=-1)
+
+        h = self.conv_out(h)
+        h = torch.permute(h, (0, 2, 3, 4, 1))
+        shape = h.shape[:-1]
+
+        u_params = self.linear_u(h)
+        u_freq  = u_params[...,0:3] * self.omega
+        u_phase = u_params[...,3:4] * self.omega
+        u_amp   = u_params[...,4:5] # TODO not used
+
+        u_dot = torch.einsum('bxyzd,bxyzd->bxyz', x, u_freq)[...,None]
+        u_pred = torch.sin(2 * np.pi * (u_dot + u_phase)) * self.alpha
+
+        mu_pred = u_pred * 0 # TODO
+
+        return u_pred, mu_pred, u_dot, u_phase, u_amp
 
 
 class UNetBlock(torch.nn.Module):
@@ -105,10 +141,11 @@ class UNetBlock(torch.nn.Module):
         n_conv_per_block,
         n_unet_blocks,
         activ_fn,
+        skip_connect,
         width_factor=1,
         width_term=0,
         depth_factor=1,
-        depth_term=0
+        depth_term=0,
     ):
         super().__init__()
 
@@ -133,10 +170,11 @@ class UNetBlock(torch.nn.Module):
                 width_term=width_term,
                 depth_factor=depth_factor,
                 depth_term=depth_term,
-                activ_fn=activ_fn
+                activ_fn=activ_fn,
+                skip_connect=skip_connect
             )
             self.conv_block_out = ConvBlock(
-                n_channels_in=n_channels_block * 2,
+                n_channels_in=n_channels_block * (1, 2)[skip_connect],
                 n_channels_block=n_channels_block,
                 n_channels_out=n_channels_out,
                 n_conv_layers=n_conv_per_block,
@@ -153,6 +191,7 @@ class UNetBlock(torch.nn.Module):
             )
 
         self.upsample = nn.Upsample(scale_factor=2)
+        self.skip_connect = skip_connect
 
     def forward(self, a):
         '''
@@ -164,7 +203,10 @@ class UNetBlock(torch.nn.Module):
         h = self.downsample(a)
         h = self.conv_block_in(h)
         if self.unet_block:
-            h = torch.cat([h, self.unet_block(h)], dim=1)
+            if self.skip_connect:
+                h = torch.cat([h, self.unet_block(h)], dim=1)
+            else:
+                h = self.unet_block(h)
         h = self.conv_block_out(h)
         h = self.upsample(h)
         return h

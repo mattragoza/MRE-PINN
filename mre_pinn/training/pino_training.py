@@ -29,7 +29,7 @@ class PINOData(deepxde.data.Data):
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a, x = inputs
         u_true, mu_true, mask = torch.split(targets, 1, dim=-1)
-        u_pred, mu_pred = outputs
+        u_pred, mu_pred = outputs[:2]
         u_loss = loss_fn(u_true, u_pred, mask)
         mu_loss = loss_fn(mu_true, mu_pred, mask)
         #pde_res = self.pde(x, u_pred, mu_pred)
@@ -122,15 +122,16 @@ class PINOModel(deepxde.Model):
 
     def predict(self, a, x):
         x.requires_grad = True
-        u_pred, mu_pred = self.net(inputs=(a, x))
-        lu_pred = u_pred * 0 #laplacian(u_pred, x)
-        return u_pred, lu_pred, mu_pred
+        u_pred, mu_pred, u_dot, u_phase, u_amp = self.net(inputs=(a, x))
+        lu_pred = laplacian(u_pred, x)
+        return u_pred, lu_pred, mu_pred, u_dot, u_phase, u_amp
 
     def test(self):
         
         # get model predictions as tensors
         inputs, targets, aux_vars, inds = self.data.test(return_inds=True)
-        u_pred, lu_pred, mu_pred = self.predict(*inputs)
+        u_pred, lu_pred, mu_pred, u_dot, u_phase, u_amp = \
+            self.predict(*inputs)
 
         # get ground truth xarrays
         a_mask = self.data.cohort[inds[0]].arrays['anat_mask']
@@ -144,6 +145,12 @@ class PINOModel(deepxde.Model):
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)
         lu_pred = as_xarray(lu_pred[0,...,0], like=u_true)
         mu_pred = as_xarray(mu_pred[0,...,0], like=mu_true)
+
+        u_amp = torch.sin(2 * np.pi * u_dot)
+
+        u_dot = as_xarray(u_dot[0,...,0], like=u_true)
+        u_phase = as_xarray(u_phase[0,...,0], like=u_true)
+        u_amp = as_xarray(u_amp[0,...,0], like=u_true)
         
         # combine xarrays into single xarray
 
@@ -151,6 +158,16 @@ class PINOModel(deepxde.Model):
         a_dim = xr.DataArray(a_vars, dims=['variable'])
         a = xr.concat([a_mask, a_mask * a_true, a_true], dim=a_dim)
         a.name = 'anatomy'
+
+        U_vars = ['u_dot', 'u_phase', 'u_amp']
+        U_dim = xr.DataArray(U_vars, dims=['variable'])
+        U = xr.concat([u_dot, u_phase, u_amp], dim=U_dim)
+        U.name = 'wave field'
+
+        #UU_vars = ['u_dot', 'u_phase', 'u_amp']
+        #UU_dim = xr.DataArray(UU_vars, dims=['variable'])
+        #UU = xr.concat([u_dot, u_phase, u_amp], dim=UU_dim)
+        #UU.name = 'wave field'
 
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])
@@ -167,4 +184,4 @@ class PINOModel(deepxde.Model):
         mu = xr.concat([mu_pred, (mu_true - mu_pred) * m_mask, mu_true], dim=mu_dim)
         mu.name = 'elastogram'
 
-        return a, u, lu, mu
+        return a, U, u, lu
