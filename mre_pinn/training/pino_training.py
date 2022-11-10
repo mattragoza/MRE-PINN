@@ -13,7 +13,7 @@ class PINOData(deepxde.data.Data):
     def __init__(self, cohort, pde, patch_size=None, batch_size=None, device='cuda'):
         self.cohort = cohort
         self.pde = pde
-        self.mask_level = 0.8
+        self.mask_level = 1.0
 
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
         self.batch_size = batch_size
@@ -75,7 +75,7 @@ class PINOData(deepxde.data.Data):
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
         mask = torch.tensor(mask, device=self.device, dtype=torch.float32)
 
-        return (a, x), torch.cat([u, mu, mask], dim=-1), ()
+        return (u, x), torch.cat([u, mu, mask], dim=-1), ()
 
     def train_next_batch(self, batch_size=None, return_inds=False):
         '''
@@ -142,8 +142,9 @@ class PINOModel(deepxde.Model):
         lu_true = self.data.cohort[inds[0]].arrays['Lwave']
 
         # apply mask level
-        a_mask = (a_mask - 1) * self.data.mask_level + 1
-        m_mask = (m_mask - 1) * self.data.mask_level + 1
+        mask_level = 0.0
+        a_mask = (a_mask - 1) * mask_level + 1
+        m_mask = (m_mask - 1) * mask_level + 1
 
         # convert predicted tensors to xarrays
         u_pred = as_xarray(u_pred[0,...,0], like=u_true)

@@ -47,7 +47,8 @@ class HyperCNN(torch.nn.Module):
         depth_factor=1,
         depth_term=0,
         skip_connect=True,
-        dense=True
+        dense=True,
+        debug=False
     ):
         super().__init__()
 
@@ -62,7 +63,8 @@ class HyperCNN(torch.nn.Module):
             width_term=width_term,
             depth_factor=depth_factor,
             depth_term=depth_term,
-            skip_connect=skip_connect
+            skip_connect=skip_connect,
+            debug=debug
         )
         self.norm = nn.LayerNorm(n_latent)
         self.u_pinn = HyperPINN(
@@ -82,8 +84,8 @@ class HyperCNN(torch.nn.Module):
         self.regularizer = None
 
     def forward(self, inputs, debug=False):
-        a, x = inputs
-        h = self.cnn(a)
+        u, x = inputs
+        h = self.cnn(u)
         h = self.norm(h)
         h = torch.tanh(h)
         u = self.u_pinn(h, x)
@@ -112,17 +114,19 @@ class CNN(torch.nn.Module):
         debug=False
     ):
         super().__init__()
-        xyz_shape = np.array([256, 256, 16])
+        xyz_shape = np.array([256, 256, 4])
+        if debug:
+            print('input\t\t', n_channels_in, xyz_shape)
 
         self.conv_in = nn.Conv3d(
             in_channels=n_channels_in,
             out_channels=n_channels_block,
             kernel_size=1
         )
-        n_channels_in = n_channels_block
         if debug:
-            print(xyz_shape)
+            print('conv_in\t\t', n_channels_block, xyz_shape)
 
+        n_channels_in = n_channels_block
         self.blocks = []
         self.pools = []
         for i in range(n_conv_blocks):
@@ -137,33 +141,37 @@ class CNN(torch.nn.Module):
             self.blocks.append(block)
             self.add_module(f'conv_block{i}', block)
 
+            if debug:
+                print(f'conv_block{i}\t', n_channels_block, xyz_shape)
+
             if skip_connect:
                 n_channels_in = n_channels_block + n_channels_in
             else:
                 n_channels_in = n_channels_block
 
-            n_channels_block = n_channels_block * width_factor + width_term
-            n_conv_per_block = n_conv_per_block * depth_factor + depth_term
-
-            if i < 4: # pool x,y,z
-                pool = nn.AvgPool3d(kernel_size=2, stride=2)
-                xyz_shape //= 2
-            elif i < 8: # pool x,y
-                pool = nn.AvgPool3d(kernel_size=(2, 2, 1), stride=(2, 2, 1))
-                xyz_shape //= (2, 2, 1)
+            pool_shape = np.where(xyz_shape > 1, 2, 1)
+            if any(pool_shape > 1):
+                pool_shape = tuple(pool_shape)
+                pool = nn.AvgPool3d(kernel_size=pool_shape, stride=pool_shape)
+                xyz_shape //= pool_shape
             else: # no pooling
                 pool = nn.Identity()
 
             if debug:
-                print(xyz_shape)
+                print(f'pool{i}\t\t', n_channels_block, xyz_shape)
 
             self.pools.append(pool)
             self.add_module(f'pool{i}', pool)
+
+            n_channels_block = n_channels_block * width_factor + width_term
+            n_conv_per_block = n_conv_per_block * depth_factor + depth_term
 
         self.linear_out = nn.Linear(
             in_features=n_channels_in * np.prod(xyz_shape),
             out_features=n_output
         )
+        if debug:
+            print(f'linear_out\t', n_output)
         self.skip_connect = skip_connect
 
     def forward(self, a, debug=False):
@@ -208,7 +216,8 @@ class HyperLinear(torch.nn.Module):
         b = self.linear_b(h)
         n_features_out = b.shape[1]
         n_features_in = w.shape[1] // n_features_out
-        w = w.reshape(-1, n_features_in, n_features_out)
+        w = w.view(-1, n_features_in, n_features_out)
+        b = b.view(-1, 1, 1, 1, n_features_out)
         return torch.einsum('bxyzi,bio->bxyzo', x, w) + b
 
 
@@ -254,7 +263,6 @@ class HyperPINN(torch.nn.Module):
 
         # linear combination
         return self.linear1(h, y) * self.scale
-
 
 
 class UNet(torch.nn.Module):
