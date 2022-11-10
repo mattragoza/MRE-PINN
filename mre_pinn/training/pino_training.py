@@ -142,7 +142,7 @@ class PINOModel(deepxde.Model):
         lu_true = self.data.cohort[inds[0]].arrays['Lwave']
 
         # apply mask level
-        mask_level = 0.0
+        mask_level = 0.9
         a_mask = (a_mask - 1) * mask_level + 1
         m_mask = (m_mask - 1) * mask_level + 1
 
