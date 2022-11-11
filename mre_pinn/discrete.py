@@ -75,7 +75,9 @@ def laplacian(u):
     return xr.concat(components, dim=u.component).transpose(*u.dims)
 
 
-def helmholtz_inversion(u, Lu, rho=1000, frequency=None, polar=False, eps=1e-8):
+def helmholtz_inversion(
+    u, Lu, rho=1000, frequency=None, polar=False, eps=1e-8
+):
     '''
     Direct algebraic inversion of the Helmholtz equation.
 
@@ -88,25 +90,36 @@ def helmholtz_inversion(u, Lu, rho=1000, frequency=None, polar=False, eps=1e-8):
     Returns:
         An xarray of shear modulus values.
     '''
-    axes = tuple(range(1, u.ndim))
-    if frequency is None:
+    if frequency is None: # use frequency coordinate
         omega = 2 * np.pi * u.frequency
-        omega = np.expand_dims(omega, axis=axes)
+        omega = np.expand_dims(omega, axis=tuple(range(1, u.ndim)))
     else:
         omega = 2 * np.pi * frequency
 
-    if polar:
-        numer_abs_G = (rho * omega**2 * np.abs(u)).sum(axis=-1)
-        denom_abs_G = np.abs(Lu).sum(axis=-1)
+    if polar and np.iscomplexobj(u):
+        numer_abs_G = (rho * omega**2 * np.abs(u))
+        denom_abs_G = np.abs(Lu)
+        numer_phi_G = (u.real * Lu.real + u.imag * Lu.imag)
+        denom_phi_G = (np.abs(u) * np.abs(Lu))
+
+        if u.field.has_components: # vector field
+            numer_abs_G = numer_abs_G.sum(axis=-1)
+            denom_abs_G = denom_abs_G.sum(axis=-1)
+            numer_phi_G = numer_phi_G.sum(axis=-1)
+            denom_phi_G = denom_phi_G.sum(axis=-1)
+
         abs_G = numer_abs_G / (denom_abs_G + eps)
-
-        numer_phi_G = (u.real * Lu.real + u.imag * Lu.imag).sum(axis=-1)
-        denom_phi_G = (np.abs(u) * np.abs(Lu)).sum(axis=-1)
         phi_G = np.arccos(-numer_phi_G / (denom_phi_G + eps))
-
         return abs_G * np.exp(1j * phi_G)
     else:
-        return (-rho * omega**2 * u).sum(axis=-1) / (Lu.sum(axis=-1) + eps)
+        numer_mu = (-rho * omega**2 * u)
+        denom_mu = Lu
+
+        if u.field.has_components: # vector field
+            numer_mu = numer_mu.sum(axis=-1)
+            denom_mu = denom_mu.sum(axis=-1)
+
+        return numer_mu / (denom_mu + eps)
 
 
 @copy_metadata

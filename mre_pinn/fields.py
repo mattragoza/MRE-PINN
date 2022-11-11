@@ -87,6 +87,14 @@ class FieldAccessor(object):
         return tuple(self.xarray.sizes[d] for d in value_dims)
 
     @property
+    def has_frequency(self):
+        return 'frequency' in self.xarray.sizes
+
+    @property
+    def n_frequencies(self):
+        return self.xarray.sizes['frequency']
+
+    @property
     def has_components(self):
         return 'component' in self.xarray.sizes
 

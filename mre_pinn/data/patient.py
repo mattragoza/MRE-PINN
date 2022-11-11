@@ -2,13 +2,14 @@ import sys, pathlib, functools, collections
 import numpy as np
 import pandas as pd
 import xarray as xr
+import scipy.ndimage
 import skimage
 import SimpleITK as sitk
 import torch
 #torch.backends.cudnn.enabled = True
 
 from .segment import UNet3D
-from ..utils import print_if
+from ..utils import print_if, as_xarray
 from ..visual import XArrayViewer
 from .. import discrete
 
@@ -241,16 +242,38 @@ class Patient(object):
             nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
             self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
 
-    def eval_baseline(self):
+    def eval_baseline(
+        self, order=3, kernel_size=5, rho=1000, frequency=80, polar=False
+    ):
         u = self.arrays['wave']
-        Ku = discrete.savgol_smoothing(u, order=3, kernel_size=5)
-        Lu = discrete.savgol_laplacian(u, order=3, kernel_size=5)
-        Mu = discrete.helmholtz_inversion(Ku, Lu, frequency=80, polar=True)
+
+        Ku = u.copy()
+        Lu = u.copy()
+        resolution = u.field.spatial_resolution
+        for z in range(u.shape[2]):
+            Ku[...,z] = discrete.savgol_smoothing(
+                u[...,z], order=order, kernel_size=kernel_size
+            )
+            Lu[...,z] = discrete.savgol_laplacian(
+                u[...,z], order=order, kernel_size=kernel_size
+            ) / (resolution[0] * 1e-3)**2
+
+        Mu = discrete.helmholtz_inversion(Ku, Lu, rho, frequency, polar, eps=1e-5)
+
+        # post-processing
+        Mu.values[Mu.values < 0] = 0
+        a = np.array([1, 2, 3, 2, 1])
+        a = np.einsum('i,j,k->ijk', a, a, a)
+        Mu_median = scipy.ndimage.median_filter(Mu, footprint=a > 2)
+        Mu_outliers = np.abs(Mu - Mu_median) > 1000
+        Mu.values = np.where(Mu_outliers, Mu_median, Mu)
+        Mu.values = scipy.ndimage.gaussian_filter(Mu, sigma=0.65, truncate=3)
         self.arrays['Kwave'] = Ku
         self.arrays['Lwave'] = Lu
         self.arrays['Mwave'] = Mu
+        Mu.name = 'Mwave'
 
-    def view(self, sequences=None, compare=False, downsample=1):
+    def view(self, sequences, compare=False, downsample=1):
         sequences = sequences or self.sequences
         if compare:
             array = self.stack_xarrays(
