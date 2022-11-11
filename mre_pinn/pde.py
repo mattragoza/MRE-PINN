@@ -109,14 +109,14 @@ class HeteroEquation(WaveEquation):
 
     def traction_forces(self, x, u, mu):
 
-        grad_u = jacobian(u, x, dim=1)
+        grad_u = jacobian(u, x)
 
         # doesn't ∇·u = 0 ⟹ ∇(∇·u) = 0?
         # meaning we don't need the next term
         # and div_grad_u is just laplace_u
         #grad_u = (grad_u + grad_u.transpose(1, 2))
 
-        div_grad_u = divergence(grad_u, x, dim=1)
+        div_grad_u = divergence(grad_u, x)
 
         if self.detach:
             grad_u = grad_u.detach()
@@ -124,7 +124,7 @@ class HeteroEquation(WaveEquation):
 
         grad_mu = jacobian(mu, x)
 
-        return mu * div_grad_u + (grad_mu * grad_u).sum(dim=1)
+        return mu * div_grad_u + (grad_mu * grad_u).sum(dim=-1)
 
 
 class CompressEquation(WaveEquation):

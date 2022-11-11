@@ -71,10 +71,10 @@ class TestEvaluator(PeriodicCallback):
     def test(self, save_model=True):    
         arrays = self.model.test()
         self.update_arrays(arrays)
-        #metrics = self.compute_metrics(arrays)
-        #self.update_metrics(metrics)
-        #if self.plot:
-        #    self.update_plots()
+        metrics = self.compute_metrics(arrays)
+        self.update_metrics(metrics)
+        if self.plot:
+            self.update_plots()
         if self.view:
             self.update_viewers()
         if save_model and self.save_prefix: # save model state
@@ -109,11 +109,11 @@ class TestEvaluator(PeriodicCallback):
                     metric = (index, 'power_density', value)
                     metrics.append(metric)
 
-                mav = np.abs(a.real).groupby(mask_var).median(...)
-                for region, value in zip(mav.spatial_region.values, mav.values):
-                    index = (iter_, var_type, var_src, var_name, 'all', region)
-                    metric = (index, 'median_abs_value', value)
-                    metrics.append(metric)
+                #mav = np.abs(a.real).groupby(mask_var).median(...)
+                #for region, value in zip(mav.spatial_region.values, mav.values):
+                #    index = (iter_, var_type, var_src, var_name, 'all', region)
+                #    metric = (index, 'median_abs_value', value)
+                #    metrics.append(metric)
 
         return metrics
 
@@ -136,7 +136,7 @@ class TestEvaluator(PeriodicCallback):
         try:
             self.norm_plot.update_data(data)
             self.freq_plot.update_data(data[data.variable_source == 'residual'])
-            self.region_plot.update_data(data[data.variable_type == 'elastogram'])
+            #self.region_plot.update_data(data[data.variable_type == 'elastogram'])
         except AttributeError:
             self.norm_plot = visual.DataViewer(
                 data,
@@ -154,19 +154,19 @@ class TestEvaluator(PeriodicCallback):
                 hue='spatial_frequency_bin',
                 palette='Blues_r',
             )
-            self.region_plot = visual.DataViewer(
-                data[data.variable_type == 'elastogram'],
-                x='iteration',
-                y='median_abs_value',
-                col='variable_source',
-                #row='variable_type',
-                hue='spatial_region',
-                palette='Greens_r'
-            )
+            #self.region_plot = visual.DataViewer(
+            #    data[data.variable_type == 'elastogram'],
+            #    x='iteration',
+            #    y='median_abs_value',
+            #    col='variable_source',
+            #    #row='variable_type',
+            #    hue='spatial_region',
+            #    palette='Greens_r'
+            #)
         if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
-            self.region_plot.to_png(self.save_prefix + '_train_regions.png')
+            #self.region_plot.to_png(self.save_prefix + '_train_regions.png')
 
     def update_viewers(self, save=True):
         arrays = self.arrays

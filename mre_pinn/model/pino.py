@@ -40,8 +40,10 @@ class HyperCNN(torch.nn.Module):
         n_spatial_freqs,
         u_omega,
         u_scale,
+        u_loc,
         mu_omega,
         mu_scale,
+        mu_loc,
         width_factor=1,
         width_term=0,
         depth_factor=1,
@@ -72,6 +74,7 @@ class HyperCNN(torch.nn.Module):
             n_spatial_freqs=n_spatial_freqs,
             omega=u_omega,
             scale=u_scale,
+            loc=u_loc,
             dense=dense
         )
         self.mu_pinn = HyperPINN(
@@ -79,6 +82,7 @@ class HyperCNN(torch.nn.Module):
             n_spatial_freqs=n_spatial_freqs,
             omega=mu_omega,
             scale=mu_scale,
+            loc=mu_loc,
             dense=dense
         )
         self.regularizer = None
@@ -90,7 +94,7 @@ class HyperCNN(torch.nn.Module):
         h = torch.tanh(h)
         u = self.u_pinn(h, x)
         mu = self.mu_pinn(h, x)
-        mu = torch.nn.functional.elu(mu)
+        mu = torch.nn.functional.leaky_relu(mu)
         return u, mu
 
 
@@ -223,7 +227,7 @@ class HyperLinear(torch.nn.Module):
 
 class HyperPINN(torch.nn.Module):
 
-    def __init__(self, n_latent, n_spatial_freqs, omega, scale, dense=True):
+    def __init__(self, n_latent, n_spatial_freqs, omega, scale, loc, dense=True):
         super().__init__()
         if dense:
             self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
@@ -231,8 +235,12 @@ class HyperPINN(torch.nn.Module):
         else:
             self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
             self.linear1 = HyperLinear(n_latent, n_spatial_freqs, 1)
-        self.omega = omega
-        self.scale = scale
+
+        self.center = nn.Parameter(torch.zeros(1, 3, dtype=torch.float32))
+        self.omega = nn.Parameter(torch.tensor(omega, dtype=torch.float32))
+        self.scale = nn.Parameter(torch.tensor(scale, dtype=torch.float32))
+        self.loc = nn.Parameter(torch.tensor(loc, dtype=torch.float32))
+
         self.dense = dense
 
     def forward(self, h, x):
@@ -243,7 +251,7 @@ class HyperPINN(torch.nn.Module):
         Returns:
             y: (batch_size, n_x, n_y, n_z, 1)
         '''
-        x = x * self.omega
+        x = x * self.omega + self.center
 
         # cylindrical coordinates
         x, y, z = torch.split(x, 1, dim=-1)
@@ -262,7 +270,7 @@ class HyperPINN(torch.nn.Module):
             y = torch.cat([x, y], dim=-1)
 
         # linear combination
-        return self.linear1(h, y) * self.scale
+        return self.linear1(h, y) * self.scale + self.loc
 
 
 class UNet(torch.nn.Module):
