@@ -37,7 +37,8 @@ class HyperCNN(torch.nn.Module):
         n_conv_blocks,
         activ_fn,
         n_latent,
-        n_spatial_freqs,
+        n_pinn_layers,
+        n_pinn_hidden,
         u_omega,
         u_scale,
         u_loc,
@@ -54,7 +55,7 @@ class HyperCNN(torch.nn.Module):
     ):
         super().__init__()
 
-        self.cnn = CNN(
+        self.u_cnn = CNN(
             n_channels_in=n_channels_in,
             n_channels_block=n_channels_block,
             n_conv_per_block=n_conv_per_block,
@@ -68,18 +69,35 @@ class HyperCNN(torch.nn.Module):
             skip_connect=skip_connect,
             debug=debug
         )
-        self.norm = nn.LayerNorm(n_latent)
+        self.u_norm = nn.LayerNorm(n_latent)
         self.u_pinn = HyperPINN(
             n_latent=n_latent,
-            n_spatial_freqs=n_spatial_freqs,
+            n_layers=n_pinn_layers,
+            n_hidden=n_pinn_hidden,
             omega=u_omega,
             scale=u_scale,
             loc=u_loc,
             dense=dense
         )
+        self.mu_cnn = CNN(
+            n_channels_in=n_channels_in,
+            n_channels_block=n_channels_block,
+            n_conv_per_block=n_conv_per_block,
+            n_conv_blocks=n_conv_blocks,
+            activ_fn=activ_fn,
+            n_output=n_latent,
+            width_factor=width_factor,
+            width_term=width_term,
+            depth_factor=depth_factor,
+            depth_term=depth_term,
+            skip_connect=skip_connect,
+            debug=debug
+        )
+        self.mu_norm = nn.LayerNorm(n_latent)
         self.mu_pinn = HyperPINN(
             n_latent=n_latent,
-            n_spatial_freqs=n_spatial_freqs,
+            n_layers=n_pinn_layers,
+            n_hidden=n_pinn_hidden,
             omega=mu_omega,
             scale=mu_scale,
             loc=mu_loc,
@@ -89,13 +107,17 @@ class HyperCNN(torch.nn.Module):
 
     def forward(self, inputs, debug=False):
         u, x = inputs
-        h = self.cnn(u)
-        h = self.norm(h)
+        h = self.u_cnn(u)
+        h = self.u_norm(h)
         h = torch.tanh(h)
-        u = self.u_pinn(h, x)
-        mu = self.mu_pinn(h, x)
-        mu = torch.nn.functional.leaky_relu(mu)
-        return u, mu
+        u_pred = self.u_pinn(h, x)
+
+        h = self.mu_cnn(u)
+        h = self.mu_norm(h)
+        h = torch.tanh(h)
+        mu_pred = self.mu_pinn(h, x)
+        mu_pred = torch.nn.functional.leaky_relu(mu_pred)
+        return u_pred, mu_pred
 
 
 class CNN(torch.nn.Module):
@@ -227,20 +249,36 @@ class HyperLinear(torch.nn.Module):
 
 class HyperPINN(torch.nn.Module):
 
-    def __init__(self, n_latent, n_spatial_freqs, omega, scale, loc, dense=True):
+    def __init__(
+        self,
+        n_latent,
+        n_layers,
+        n_hidden,
+        omega,
+        scale,
+        loc,
+        dense=True
+    ):
+        assert n_layers > 0
         super().__init__()
-        if dense:
-            self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
-            self.linear1 = HyperLinear(n_latent, 6 + n_spatial_freqs, 1)
-        else:
-            self.linear0 = HyperLinear(n_latent, 6, n_spatial_freqs)
-            self.linear1 = HyperLinear(n_latent, n_spatial_freqs, 1)
+        n_input = 6
 
-        self.center = nn.Parameter(torch.zeros(1, 3, dtype=torch.float32))
-        self.omega = nn.Parameter(torch.tensor(omega, dtype=torch.float32))
-        self.scale = nn.Parameter(torch.tensor(scale, dtype=torch.float32))
-        self.loc = nn.Parameter(torch.tensor(loc, dtype=torch.float32))
+        self.hiddens = []
+        for i in range(n_layers - 1):
+            hidden = HyperLinear(n_latent, n_input, n_hidden)
+            if dense:
+                n_input += n_hidden
+            else:
+                n_input = n_hidden
+            self.hiddens.append(hidden)
+            self.add_module(f'hidden{i}', hidden)
 
+        self.output = HyperLinear(n_latent, n_input, 3)
+
+        self.center = torch.zeros(1, 3, dtype=torch.float32)
+        self.omega = torch.tensor(omega, dtype=torch.float32)
+        self.scale = torch.tensor(scale, dtype=torch.float32)
+        self.loc = torch.tensor(loc, dtype=torch.float32)
         self.dense = dense
 
     def forward(self, h, x):
@@ -253,24 +291,23 @@ class HyperPINN(torch.nn.Module):
         '''
         x = x * self.omega + self.center
 
-        # cylindrical coordinates
+        # polar coordinates
         x, y, z = torch.split(x, 1, dim=-1)
         r = torch.sqrt(x**2 + y**2)
-        sin = x / (r + 1)
-        cos = y / (r + 1)
-        if self.dense:
-            x = torch.cat([x, y, z, r, sin, cos], dim=-1)
-        else:
-            x = torch.cat([z, r, sin, cos], dim=-1)
+        eps = 1
+        sin, cos = x / (r + eps), y / (r + eps)
+        x = torch.cat([x, y, z, r, sin, cos], dim=-1)
 
-        # spectral basis functions
-        y = self.linear0(h, x)
-        y = torch.sin(2 * np.pi * y)
-        if self.dense:
-            y = torch.cat([x, y], dim=-1)
+        # hidden layers
+        for i, hidden in enumerate(self.hiddens):
+            y = torch.sin(hidden(h, x))
+            if self.dense:
+                x = torch.cat([x, y], dim=-1)
+            else:
+                x = y
 
-        # linear combination
-        return self.linear1(h, y) * self.scale + self.loc
+        # output layer
+        return self.output(h, x) * self.scale + self.loc
 
 
 class UNet(torch.nn.Module):
