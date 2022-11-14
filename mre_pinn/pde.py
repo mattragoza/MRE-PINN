@@ -200,7 +200,7 @@ def jacobian(u, x):
     components = []
     for i in range(u.shape[-1]):
         component = gradient(u[...,i:i+1], x)
-        components.append(component)
+        components.append(component[...,:-1]) # no z
     return torch.stack(components, dim=-2)
 
 
@@ -221,7 +221,7 @@ def divergence(u, x):
     for i in range(u.shape[-2]):
         J = jacobian(u[...,i,:], x)
         component =  0
-        for j in range(u.shape[-1]):
+        for j in range(J.shape[-1]):
             component += J[...,j,j]
         components.append(component)
     return torch.stack(components, dim=-1)
