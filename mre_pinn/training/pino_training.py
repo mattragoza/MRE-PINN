@@ -177,10 +177,10 @@ class PINOModel(deepxde.Model):
             lu.name = 'Laplacian'
 
         if True:
-            pde_vars = ['f_trac', 'pde_diff', 'f_body']
+            pde_vars = ['f_trac', 'pde_diff', 'pde_grad']
             pde_dim = xr.DataArray(pde_vars, dims=['variable'])
             pde = xr.concat(
-                [f_trac * m_mask, 2 * lu_pred * (f_trac + f_body) * m_mask, f_body * m_mask],
+                [f_trac * m_mask, (f_trac + f_body) * m_mask, 2 * lu_pred * (f_trac + f_body) * m_mask],
                 dim=pde_dim
             )
             pde.name = 'PDE'
