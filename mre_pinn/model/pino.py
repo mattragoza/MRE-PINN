@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 #torch.backends.cudnn.enabled = False
@@ -51,6 +52,7 @@ class HyperCNN(torch.nn.Module):
         depth_term=0,
         skip_connect=True,
         dense=True,
+        parallel=False,
         debug=False
     ):
         super().__init__()
@@ -70,6 +72,24 @@ class HyperCNN(torch.nn.Module):
             debug=debug
         )
         self.u_norm = nn.LayerNorm(n_latent)
+
+        if parallel:
+            self.mu_cnn = CNN(
+                n_channels_in=n_channels_in,
+                n_channels_block=n_channels_block,
+                n_conv_per_block=n_conv_per_block,
+                n_conv_blocks=n_conv_blocks,
+                activ_fn=activ_fn,
+                n_output=n_latent,
+                width_factor=width_factor,
+                width_term=width_term,
+                depth_factor=depth_factor,
+                depth_term=depth_term,
+                skip_connect=skip_connect,
+                debug=debug
+            )
+            self.mu_norm = nn.LayerNorm(n_latent)
+
         self.u_pinn = HyperPINN(
             n_latent=n_latent,
             n_layers=n_pinn_layers,
@@ -79,21 +99,6 @@ class HyperCNN(torch.nn.Module):
             loc=u_loc,
             dense=dense
         )
-        self.mu_cnn = CNN(
-            n_channels_in=n_channels_in,
-            n_channels_block=n_channels_block,
-            n_conv_per_block=n_conv_per_block,
-            n_conv_blocks=n_conv_blocks,
-            activ_fn=activ_fn,
-            n_output=n_latent,
-            width_factor=width_factor,
-            width_term=width_term,
-            depth_factor=depth_factor,
-            depth_term=depth_term,
-            skip_connect=skip_connect,
-            debug=debug
-        )
-        self.mu_norm = nn.LayerNorm(n_latent)
         self.mu_pinn = HyperPINN(
             n_latent=n_latent,
             n_layers=n_pinn_layers,
@@ -103,6 +108,8 @@ class HyperCNN(torch.nn.Module):
             loc=mu_loc,
             dense=dense
         )
+
+        self.parallel = parallel
         self.regularizer = None
 
     def forward(self, inputs, debug=False):
@@ -112,11 +119,14 @@ class HyperCNN(torch.nn.Module):
         h = torch.tanh(h)
         u_pred = self.u_pinn(h, x)
 
-        h = self.mu_cnn(u)
-        h = self.mu_norm(h)
-        h = torch.tanh(h)
+        if self.parallel:
+            h = self.mu_cnn(u)
+            h = self.mu_norm(h)
+            h = torch.tanh(h)
+
         mu_pred = self.mu_pinn(h, x)
         mu_pred = torch.nn.functional.leaky_relu(mu_pred)
+
         return u_pred, mu_pred
 
 
