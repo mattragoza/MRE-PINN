@@ -163,7 +163,7 @@ class PINOModel(deepxde.Model):
         inputs, targets, aux_vars, inds = self.data.test(return_inds=True)
         u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(*inputs)
         Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
-        mu_pred *= 100 # scale hack?
+        #mu_pred *= 100 # scale hack?
 
         # get ground truth xarrays
         a_mask = self.data.cohort[inds[0]].arrays['anat_mask']

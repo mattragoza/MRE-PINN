@@ -249,14 +249,14 @@ class Patient(object):
 
         Ku = u.copy()
         Lu = u.copy()
-        resolution = u.field.spatial_resolution
+        resolution = u.field.spatial_resolution * 1e-3
         for z in range(u.shape[2]):
             Ku[...,z] = discrete.savgol_smoothing(
                 u[...,z], order=order, kernel_size=kernel_size
             )
             Lu[...,z] = discrete.savgol_laplacian(
                 u[...,z], order=order, kernel_size=kernel_size
-            ) / (resolution[0] * 1e-3)**2
+            ) / resolution[0]**2
 
         Mu = discrete.helmholtz_inversion(Ku, Lu, rho, frequency, polar, eps=1e-5)
 

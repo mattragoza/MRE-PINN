@@ -34,8 +34,10 @@ class WaveEquation(object):
         else:
             raise ValueError(f'unrecognized PDE name: {pde_name}')
 
-    def __init__(self, rho=1000, lambda_=0, detach=True):
-        self.rho, self.lambda_ = rho, lambda_
+    def __init__(self, rho=1000, omega=None, lambda_=0, detach=True):
+        self.rho = rho         # mass density
+        self.omega = omega     # time frequency
+        self.lambda_ = lambda_ # Lame parameter
         self.detach = detach
 
     def traction_forces(self, x, u, mu):
@@ -74,7 +76,7 @@ class WaveEquation(object):
             2 (N x D) tensors containing the traction and
                 body forces for each displacement component
         '''
-        omega = 2 * np.pi * x[:,:1] # radians
+        omega = 2 * np.pi * self.omega #x[:,:1] # radians
         f_trac = self.traction_forces(x, u, mu)
         f_body = self.body_forces(omega, u)
         return f_trac, f_body
@@ -166,7 +168,7 @@ def complex_operator(f):
 
 
 @complex_operator
-def gradient(u, x):
+def gradient(u, x, no_z=True):
     '''
     Continuous gradient operator, which maps a
     scalar field to a vector field of partial
@@ -179,11 +181,21 @@ def gradient(u, x):
         D: (..., K) gradient tensor, where:
             D[...,i] = ∂u[...,0] / ∂x[...,i]
     '''
-    ones = torch.ones_like(u)
-    return torch.autograd.grad(u, x, grad_outputs=ones, create_graph=True)[0]
+    assert u.shape[:-1] == x.shape[:-1]
+    assert u.shape[-1] == 1
+    if False:
+        grad = deepxde.grad.jacobian(u.view(-1, 1), x.view(-1, x.shape[-1]))
+        return grad.reshape(x.shape)
+    else:
+        ones = torch.ones_like(u)
+        grad = torch.autograd.grad(u, x, grad_outputs=ones, create_graph=True)[0]
+        if no_z:
+            return grad[...,:2]
+        else:
+            return grad
 
 
-def jacobian(u, x):
+def jacobian(u, x, no_z=True):
     '''
     Continuous Jacobian operator. The Jacobian
     is the gradient operator for vector fields.
@@ -199,12 +211,14 @@ def jacobian(u, x):
     '''
     components = []
     for i in range(u.shape[-1]):
-        component = gradient(u[...,i:i+1], x)
-        components.append(component[...,:-1]) # no z
+        component = gradient(u[...,i:i+1], x, no_z)
+        if no_z:
+            component = component[...,:2]
+        components.append(component)
     return torch.stack(components, dim=-2)
 
 
-def divergence(u, x):
+def divergence(u, x, no_z=True):
     '''
     Continuous tensor divergence operator.
     Divergence is the trace of the Jacobian,
@@ -219,7 +233,7 @@ def divergence(u, x):
     '''
     components = []
     for i in range(u.shape[-2]):
-        J = jacobian(u[...,i,:], x)
+        J = jacobian(u[...,i,:], x, no_z)
         component =  0
         for j in range(J.shape[-1]):
             component += J[...,j,j]
@@ -227,7 +241,7 @@ def divergence(u, x):
     return torch.stack(components, dim=-1)
 
 
-def laplacian(u, x):
+def laplacian(u, x, no_z=True):
     '''
     Continuous vector Laplacian operator.
     The Laplacian is the divergence of the
@@ -241,4 +255,4 @@ def laplacian(u, x):
         L: (..., M) Laplacian tensor, where:
             L[...,i] = ∑ⱼ ∂²u[...,i] / ∂x[...,j]²
     '''
-    return divergence(jacobian(u, x), x)
+    return divergence(jacobian(u, x, no_z), x, no_z)

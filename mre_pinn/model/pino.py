@@ -14,18 +14,20 @@ def xavier(fan_in, fan_out, gain=1, c=6):
     return nn.Parameter((2 * w - 1) * scale)
 
 
-def printt(**kwargs):
+def metadata(**kwargs):
     '''
-    Print tensor info.
+    Print shape and type.
     '''
     for key, val in kwargs.items():
         print(f'{key}\t{val.shape}\t{val.dtype}')
 
 
 def describe(**kwargs):
+    '''
+    Print descriptive statistics.
+    '''
     for key, val in kwargs.items():
         print(f'{key}\t{val.mean()}\t{val.std()}')
-
 
 
 class HyperCNN(torch.nn.Module):
