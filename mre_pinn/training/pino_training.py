@@ -1,4 +1,5 @@
 import time
+from functools import cache
 import numpy as np
 import xarray as xr
 import torch
@@ -12,27 +13,50 @@ from .losses import msae_loss
 
 class PINOData(deepxde.data.Data):
 
-    def __init__(self, cohort, pde, patch_size=None, batch_size=None, device='cuda'):
+    def __init__(
+        self, cohort, pde, loss_weights, batch_size=None, device='cuda'
+    ):
         self.cohort = cohort
         self.pde = pde
         self.mask_level = 1.0
 
+        self.loss_weights = loss_weights
+        self.pde_warmup_iters = 5000
+        self.pde_step_iters = 1000
+        self.pde_step_factor = 10
+        self.pde_init = 1e-19
+
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
         self.batch_size = batch_size
-        self.patch_size = patch_size
         self.device = device
+
+        print('Precomputing tensors')
+        for i in range(len(cohort)):
+            self.get_tensors(i)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a, x = inputs
         u_true, mu_true, mask = torch.split(targets, 1, dim=-1)
         u_pred, mu_pred = outputs[:2]
         u_loss = loss_fn(u_true, u_pred, mask, self.mask_level)
-        mu_loss = loss_fn(mu_true, mu_pred, mask, self.mask_level)
+        mu_true_mean = mu_true.mean(dim=(1,2,3,4), keepdim=True)
+        mu_pred_mean = mu_pred.mean(dim=(1,2,3,4), keepdim=True)
+        mu_loss = loss_fn(mu_true_mean, mu_pred_mean, mask, self.mask_level)
         pde_res = self.pde(x, u_pred, mu_pred)
         pde_loss = loss_fn(0, pde_res, mask, self.mask_level)
-        return [u_loss, mu_loss, pde_loss]
 
-    def get_tensors(self, idx, patch_size=None):
+        u_weight, mu_weight, pde_weight = self.loss_weights
+        pde_iter = model.train_state.step - self.pde_warmup_iters
+        if pde_iter < 0: # warmup phase
+            pde_weight = 0
+        else: # PDE training phase
+            n_steps = pde_iter // self.pde_step_iters
+            pde_factor = self.pde_step_factor ** n_steps
+            pde_weight = min(pde_weight, self.pde_init * pde_factor)
+        return [u_loss * u_weight, mu_loss * mu_weight, pde_loss * pde_weight]
+
+    @cache
+    def get_tensors(self, idx):
         '''
         Args:
             idx: Patient index in cohort.
@@ -51,17 +75,6 @@ class PINOData(deepxde.data.Data):
         u = patient.arrays['wave'].values[...,None]
         mu = patient.arrays['mre'].values[...,None]
         mask = patient.arrays['mre_mask'].values[...,None]
-
-        if patch_size is not None: # sample patch
-            n_x, n_y, n_z = y.shape[:3]
-            patch_x = np.random.randint(n_x - patch_size + 1)
-            patch_y = np.random.randint(n_y - patch_size + 1)
-
-            a = a[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            x = x[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            u = u[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            mu = mu[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
-            mask = mask[patch_x:patch_x + patch_size, patch_y:patch_y + patch_size]
 
         # convert arrays to tensors
         a = torch.tensor(a, device=self.device, dtype=torch.float32)
@@ -88,7 +101,7 @@ class PINOData(deepxde.data.Data):
 
         inputs, targets, aux_vars = [], [], []
         for idx in batch_inds:
-            input, target, aux = self.get_tensors(idx, self.patch_size)
+            input, target, aux = self.get_tensors(idx)
             inputs.append(input)
             targets.append(target)
             aux_vars.append(aux)
@@ -108,10 +121,10 @@ class PINOData(deepxde.data.Data):
 
 class PINOModel(deepxde.Model):
     
-    def __init__(self, data, net, pde, patch_size=None, batch_size=None):
+    def __init__(self, data, net, pde, loss_weights, batch_size=None):
 
         # initialize the training data
-        data = PINOData(data, pde, patch_size, batch_size)
+        data = PINOData(data, pde, loss_weights, batch_size)
 
         # initialize the network weights
         #TODO net.init_weights()
@@ -163,7 +176,6 @@ class PINOModel(deepxde.Model):
         inputs, targets, aux_vars, inds = self.data.test(return_inds=True)
         u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(*inputs)
         Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
-        #mu_pred *= 100 # scale hack?
 
         # get ground truth xarrays
         a_mask = self.data.cohort[inds[0]].arrays['anat_mask']
