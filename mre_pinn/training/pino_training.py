@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import xarray as xr
 import torch
@@ -6,6 +7,7 @@ import deepxde
 from ..utils import as_xarray
 from ..pde import laplacian
 from .. import discrete
+from .losses import msae_loss
 
 
 class PINOData(deepxde.data.Data):
@@ -79,6 +81,8 @@ class PINOData(deepxde.data.Data):
             targets: Tuple of target tensors.
             aux_vars: Tuple of auxiliary tensors.
         '''
+        t_start = time.time()
+
         batch_size = batch_size or self.batch_size
         batch_inds = self.batch_sampler.get_next(batch_size)
 
@@ -92,7 +96,7 @@ class PINOData(deepxde.data.Data):
         inputs = tuple(torch.stack(x) for x in zip(*inputs))
         targets = torch.stack(targets)
         aux_vars = tuple(torch.stack(x) for x in zip(*aux_vars))
-
+        
         if return_inds:
             return inputs, targets, aux_vars, batch_inds
         else:
@@ -120,6 +124,38 @@ class PINOModel(deepxde.Model):
         lu_pred = laplacian(u_pred, x)
         f_trac, f_body = self.data.pde.traction_and_body_forces(x, u_pred, mu_pred)
         return u_pred, mu_pred, lu_pred, f_trac, f_body
+
+    def benchmark(self, n_iters=100):
+
+        print(f'# iterations: {n_iters}')
+        data_time = 0
+        model_time = 0
+        loss_time = 0
+        for i in range(n_iters):
+            t_start = time.time()
+            inputs, targets, aux_vars = self.data.train_next_batch()
+            t_data = time.time()
+            u, x = inputs
+            x.requires_grad = True
+            outputs = self.net(inputs)
+            t_model = time.time()
+            losses = self.data.losses(targets, outputs, msae_loss, inputs, self)
+            t_loss = time.time()
+            data_time += (t_data - t_start) / n_iters
+            model_time += (t_model - t_data) / n_iters
+            loss_time += (t_loss - t_model) / n_iters
+
+        iter_time = data_time + model_time + loss_time
+        print(f'Data time/iter:  {data_time:.4f}s ({data_time/iter_time*100:.2f}%)')
+        print(f'Model time/iter: {model_time:.4f}s ({model_time/iter_time*100:.2f}%)')
+        print(f'Loss time/iter:  {loss_time:.4f}s ({loss_time/iter_time*100:.2f}%)')
+        print(F'Total time/iter: {iter_time:.4f}s')
+
+        total_time = iter_time * n_iters
+        print(f'Total time: {total_time:.4f}s')
+        print(f'1k iters time: {iter_time * 1e3 / 60:.2f}m')
+        print(f'10k iters time: {iter_time * 1e4 / 60:.2f}m')
+        print(f'100k iters time: {iter_time * 1e5 / 3600:.2f}h')
 
     def test(self):
         

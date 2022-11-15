@@ -59,14 +59,15 @@ class TestEvaluator(PeriodicCallback):
 
     def on_period_begin(self):
         t_start = time.time()
+
         save_model = (self.iteration % self.save_every == 0)
         self.test(save_model)
-        self.test_time += (time.time() - t_start)
 
-    def on_period_end(self):
         total_time = time.time() - self.t_start
+        test_time = time.time() - t_start
+        self.test_time += test_time
         pct_test_time = self.test_time / total_time * 100
-        print(f'Time spent testing: {pct_test_time:.2f}%')
+        print(f'Time spent testing: {test_time:.4f} ({pct_test_time:.2f}%)')
 
     def test(self, save_model=True):    
         arrays = self.model.test()
