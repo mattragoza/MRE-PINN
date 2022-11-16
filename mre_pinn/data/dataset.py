@@ -1,8 +1,9 @@
 import os, pathlib, glob
 import numpy as np
 import xarray as xr
+from sklearn.model_selection import KFold
 
-from ..utils import print_if, as_xarray
+from ..utils import print_if, as_xarray, is_iterable
 from ..visual import XArrayViewer
 
 import scipy.ndimage
@@ -13,9 +14,9 @@ class MREDataset(object):
     '''
     A set of preprocessed MRE imaging sequences in xarray format.
     '''
-    def __init__(self, examples, example_ids):
+    def __init__(self, example_ids, examples):
+        self.example_ids = np.array(example_ids)
         self.examples = examples
-        self.example_ids = example_ids
 
     @classmethod
     def from_bioqic(cls, bioqic):
@@ -28,9 +29,9 @@ class MREDataset(object):
         for patient_id in cohort.patient_ids:
             patient = cohort.patients[patient_id]
             ex = MREExample.from_patient(patient)
-            examples[patient_id] = ex
             example_ids.append(patient_id)
-        return cls(examples, example_ids)
+            examples[patient_id] = ex
+        return cls(example_ids, examples)
 
     @classmethod
     def from_xarrays(cls, xarray_dir, verbose=True):
@@ -38,15 +39,20 @@ class MREDataset(object):
         example_ids = []
         for example_id in os.listdir(xarray_dir):
             ex = MREExample.from_xarrays(xarray_dir, example_id)
-            examples[example_id] = ex
             example_ids.append(example_id)
-        return cls(examples, example_ids)
+            examples[example_id] = ex
+        return cls(example_ids, examples)
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, idx):
-        return self.examples[self.example_ids[idx]]
+        if is_iterable(idx, string_ok=False) or isinstance(idx, slice):
+            example_ids = self.example_ids[idx]
+            examples = [self.examples[xid] for xid in example_ids]
+            return type(self)(example_ids, examples)
+        else:
+            return self.examples[self.example_ids[idx]]
 
     def save_xarrays(self, xarray_dir, verbose=True):
         for xid in self.example_ids:
@@ -58,8 +64,10 @@ class MREDataset(object):
             ex = self.examples[xid]
             ex.eval_baseline()
 
-    def split(self, k):
-        pass # TODO k-fold crossval split
+    def k_fold_split(self, *args, **kwargs):
+        k_fold = KFold(*args, **kwargs)
+        for train_ids, test_ids in k_fold.split(self.example_ids):
+            yield self[train_ids], self[test_ids]
 
 
 class MREExample(object):
