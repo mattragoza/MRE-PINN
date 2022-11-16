@@ -193,16 +193,16 @@ class PINOModel(deepxde.Model):
             use_mask=False, return_inds=True
         )
         u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(inputs)
-        Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
+        #Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
 
         # get ground truth xarrays
-        a_true = self.data.dataset[inds[0]].anat
-        u_true = self.data.dataset[inds[0]].wave
+        a_true  = self.data.dataset[inds[0]].anat
+        u_true  = self.data.dataset[inds[0]].wave
         mu_true = self.data.dataset[inds[0]].mre
-        a_mask = self.data.dataset[inds[0]].anat_mask
-        m_mask = self.data.dataset[inds[0]].mre_mask
+        a_mask  = self.data.dataset[inds[0]].anat_mask
+        m_mask  = self.data.dataset[inds[0]].mre_mask
         Lu_true = self.data.dataset[inds[0]].Lwave
-        Mu_true = self.data.dataset[inds[0]].Mwave
+        Mu_base = self.data.dataset[inds[0]].Mwave
 
         # apply mask level
         mask_level = 1.0
@@ -215,59 +215,54 @@ class PINOModel(deepxde.Model):
         lu_pred = as_xarray(lu_pred.reshape(u_shape), like=u_true)
         f_trac  = as_xarray(f_trac.reshape(u_shape), like=u_true)
         f_body  = as_xarray(f_body.reshape(u_shape), like=u_true)
-        Mu_pred = as_xarray(Mu_pred.reshape(mu_shape), like=Mu_true)
+        #Mu_pred = as_xarray(Mu_pred.reshape(mu_shape), like=Mu_true)
         mu_pred = as_xarray(mu_pred.reshape(mu_shape), like=mu_true)
         
         # combine xarrays into single xarray
-        if True:
+        if False:
             a_vars = ['a_mask', 'a_over', 'a_true']
             a_dim = xr.DataArray(a_vars, dims=['variable'])
             a = xr.concat([a_mask, a_mask * a_true, a_true], dim=a_dim)
             a.name = 'anatomy'
 
-        if True:
-            u_vars = ['u_pred', 'u_diff', 'u_true']
-            u_dim = xr.DataArray(u_vars, dims=['variable'])
-            u = xr.concat(
-                [u_pred * m_mask, (u_true - u_pred) * m_mask, u_true * m_mask],
-                dim=u_dim
-            )
-            u.name = 'wave field'
+        u_vars = ['u_pred', 'u_diff', 'u_true']
+        u_dim = xr.DataArray(u_vars, dims=['variable'])
+        u = xr.concat(
+            [u_pred * m_mask, (u_true - u_pred) * m_mask, u_true * m_mask],
+            dim=u_dim
+        )
+        u.name = 'wave field'
 
-        if True:
-            lu_vars = ['lu_pred', 'lu_diff', 'Lu_true']
-            lu_dim = xr.DataArray(lu_vars, dims=['variable'])
-            lu = xr.concat(
-                [lu_pred * m_mask, (Lu_true - lu_pred) * m_mask, Lu_true * m_mask],
-                dim=lu_dim
-            )
-            lu.name = 'Laplacian'
+        lu_vars = ['lu_pred', 'lu_diff', 'Lu_true']
+        lu_dim = xr.DataArray(lu_vars, dims=['variable'])
+        lu = xr.concat(
+            [lu_pred * m_mask, (Lu_true - lu_pred) * m_mask, Lu_true * m_mask],
+            dim=lu_dim
+        )
+        lu.name = 'Laplacian'
 
-        if True:
-            pde_vars = ['f_trac', 'pde_diff', 'pde_grad']
-            pde_dim = xr.DataArray(pde_vars, dims=['variable'])
-            pde = xr.concat(
-                [f_trac * m_mask, (f_trac + f_body) * m_mask, 2 * lu_pred * (f_trac + f_body) * m_mask],
-                dim=pde_dim
-            )
-            pde.name = 'PDE'
+        pde_vars = ['f_trac', 'pde_diff', 'pde_grad']
+        pde_dim = xr.DataArray(pde_vars, dims=['variable'])
+        pde = xr.concat(
+            [f_trac * m_mask, (f_trac + f_body) * m_mask, 2 * lu_pred * (f_trac + f_body) * m_mask],
+            dim=pde_dim
+        )
+        pde.name = 'PDE'
 
-        if True:
-            mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
-            mu_dim = xr.DataArray(mu_vars, dims=['variable'])
-            mu = xr.concat(
-                [mu_pred * m_mask, (mu_true - mu_pred) * m_mask, mu_true * m_mask],
-                dim=mu_dim
-            )
-            mu.name = 'elastogram'
+        mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
+        mu_dim = xr.DataArray(mu_vars, dims=['variable'])
+        mu = xr.concat(
+            [mu_pred * m_mask, (mu_true - mu_pred) * m_mask, mu_true * m_mask],
+            dim=mu_dim
+        )
+        mu.name = 'elastogram'
 
-        if True:
-            Mu_vars = ['Mu_pred', 'Mu_diff', 'Mu_true']
-            Mu_dim = xr.DataArray(Mu_vars, dims=['variable'])
-            Mu = xr.concat(
-                [Mu_pred * m_mask, (Mu_true - Mu_pred) * m_mask, Mu_true * m_mask],
-                dim=Mu_dim
-            )
-            Mu.name = 'baseline'
+        Mu_vars = ['Mu_base', 'Mu_diff', 'mu_true']
+        Mu_dim = xr.DataArray(Mu_vars, dims=['variable'])
+        Mu = xr.concat(
+            [Mu_base * m_mask, (Mu_base - mu_true) * m_mask, mu_true * m_mask],
+            dim=Mu_dim
+        )
+        Mu.name = 'baseline'
 
         return u, lu, pde, mu, Mu
