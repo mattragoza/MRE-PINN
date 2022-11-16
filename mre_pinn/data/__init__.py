@@ -1,4 +1,4 @@
-from . import bioqic, patient
+from . import bioqic, imaging, dataset
 from .bioqic import load_bioqic_dataset
-from .patient import Patient
-from .cohort import PatientCohort
+from .imaging import ImagingPatient, ImagingCohort
+from .dataset import MREExample, MREDataset

@@ -15,23 +15,24 @@ class PINOData(deepxde.data.Data):
 
     def __init__(
         self,
-        cohort,
+        dataset,
         pde,
         loss_weights,
         pde_warmup_iters=10000,
         pde_step_iters=5000,
+        pde_step_factor=10,
         n_points=4096,
         batch_size=None,
         device='cuda'
     ):
-        self.cohort = cohort
+        self.dataset = dataset
         self.pde = pde
 
         self.loss_weights = loss_weights
         self.pde_warmup_iters = pde_warmup_iters
         self.pde_step_iters = pde_step_iters
-        self.pde_step_factor = 10
-        self.pde_init = 1e-19
+        self.pde_step_factor = pde_step_factor
+        self.pde_init_weight = 1e-19
         self.n_points = n_points
 
         self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
@@ -60,7 +61,7 @@ class PINOData(deepxde.data.Data):
         else: # PDE training phase
             n_steps = pde_iter // self.pde_step_iters
             pde_factor = self.pde_step_factor ** n_steps
-            pde_weight = min(pde_weight, self.pde_init * pde_factor)
+            pde_weight = min(pde_weight, self.pde_init_weight * pde_factor)
         return [
             u_loss * u_weight, mu_loss * mu_weight, pde_loss * pde_weight
         ]
@@ -69,24 +70,20 @@ class PINOData(deepxde.data.Data):
     def get_tensors(self, idx, use_mask):
         '''
         Args:
-            idx: Patient index in cohort.
+            idx: Example index in dataset.
         Returns:
             input: Tuple of input tensors.
             target: Target tensor.
             aux_vars: Tuple of auxiliary tensors.
         '''
-        patient = self.cohort[idx]
-        a_sequences = [
-            't1_pre_in', 't1_pre_out', 't1_pre_water', 't1_pre_fat'
-        ]
-        a_arrays = [patient.arrays[seq].values for seq in a_sequences]
-        a_im = np.stack(a_arrays, axis=-1)
-        u_im = patient.arrays['wave'].values[...,None]
-        x = patient.arrays['wave'].field.points() * 1e-3
-        u = patient.arrays['wave'].field.values()
-        mu = patient.arrays['mre'].field.values()
+        example = self.dataset[idx]
+        a_im = example.anat.values[...,None]
+        u_im = example.wave.values[...,None]
+        x = example.wave.field.points() * 1e-3
+        u = example.wave.field.values()
+        mu = example.mre.field.values()
         if use_mask:
-            mask = patient.arrays['mre_mask'].values.reshape(-1).astype(bool)
+            mask = example.mre_mask.values.reshape(-1).astype(bool)
             x, u, mu = x[mask], u[mask], mu[mask]
 
         # convert arrays to tensors
@@ -139,10 +136,10 @@ class PINOData(deepxde.data.Data):
 
 class PINOModel(deepxde.Model):
     
-    def __init__(self, cohort, net, pde, **kwargs):
+    def __init__(self, dataset, net, pde, **kwargs):
 
         # initialize the training data
-        data = PINOData(cohort, pde, **kwargs)
+        data = PINOData(dataset, pde, **kwargs)
 
         # initialize the network weights
         #TODO net.init_weights()
@@ -199,13 +196,11 @@ class PINOModel(deepxde.Model):
         Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
 
         # get ground truth xarrays
-        a_mask = self.data.cohort[inds[0]].arrays['anat_mask']
-        m_mask = self.data.cohort[inds[0]].arrays['mre_mask']
-        a_true = self.data.cohort[inds[0]].arrays['t1_pre_in']
-        u_true = self.data.cohort[inds[0]].arrays['wave']
-        Lu_true = self.data.cohort[inds[0]].arrays['Lwave']
-        Mu_true = self.data.cohort[inds[0]].arrays['Mwave']
-        mu_true = self.data.cohort[inds[0]].arrays['mre']
+        a_true = self.data.dataset[inds[0]].anat
+        u_true = self.data.dataset[inds[0]].wave
+        mu_true = self.data.dataset[inds[0]].mre
+        a_mask = self.data.dataset[inds[0]].anat_mask
+        m_mask = self.data.dataset[inds[0]].mre_mask
 
         # apply mask level
         mask_level = 1.0

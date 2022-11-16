@@ -1,4 +1,4 @@
-import sys, pathlib, functools, collections
+import sys, pathlib, glob, functools, collections
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -9,7 +9,7 @@ import torch
 #torch.backends.cudnn.enabled = True
 
 from .segment import UNet3D
-from ..utils import print_if, as_xarray
+from ..utils import print_if, progress, braced_glob, as_path_list
 from ..visual import XArrayViewer
 from .. import discrete
 
@@ -26,7 +26,124 @@ SEQUENCES = [
 ]
 
 
-class Patient(object):
+class ImagingCohort(object):
+    '''
+    An object for loading and preprocessing MRI and MRE
+    images for a group of patients.
+
+    Args:
+        nifti_dirs: Directories to look for NIFTI files.
+        patient_ids: Either a list of requested patient IDs,
+            or a glob pattern for finding available patients IDs.
+        sequences: Either a list of requested sequence names,
+            or a glob pattern for finding available sequences.
+        verbose: If True, print verbose output.
+    '''
+    def __init__(
+        self,
+        patient_ids='*',
+        sequences=SEQUENCES,
+        nifti_dirs='/ocean/projects/asc170022p/shared/Data/MRE/*/NIFTI',
+        verbose=True
+    ):
+        self.verbose = verbose
+
+        if isinstance(nifti_dirs, str):
+            nifti_dirs = braced_glob(nifti_dirs)
+            assert nifti_dirs, 'No matching NIFTI dirs'
+        else:
+            nifti_dirs = as_path_list(nifti_dirs)
+            missing_dirs = {d for d in nifti_dirs if not d.exists()}
+            assert not missing_dirs, \
+                f'NIFTI dirs {sorted(missing_dirs)} do not exist'
+        self.nifti_dirs = nifti_dirs
+
+        if isinstance(patient_ids, str): # glob pattern
+            pattern = patient_ids
+            found_patients, found_ids = self.find_patients(pattern, sequences)
+            assert found_patients, \
+                f'No patients matching {repr(pattern)} with sequences {sequences}'
+            self.patient_ids = found_ids
+            self.patients = found_patients
+
+        else: # list of requested patient ids
+            patients, missing_ids = self.get_patients(patient_ids, sequences)
+            assert not missing_ids, \
+                f'Patients {sorted(missing_ids)} are missing or missing sequences'
+            self.patient_ids = patient_ids
+            self.patients = patients
+
+    def find_patients(self, pattern='*', sequences='*'):
+        '''
+        Find patients that match a glob pattern
+        and have the requested imaging sequences.
+        '''
+        patients, patient_ids = {}, []
+        for nifti_dir in self.nifti_dirs:
+            for patient_dir in braced_glob(nifti_dir / pattern):
+                pid = patient_dir.stem
+                try:
+                    patient = ImagingPatient(pid, sequences, nifti_dir)
+                    patient_ids.append(pid)
+                    patients[pid] = patient
+                except AssertionError as e:
+                    print_if(self.verbose, e)
+                    continue
+        return patients, patient_ids
+
+    def get_patients(self, patient_ids, sequences='*'):
+        '''
+        Get patients from a list of requested IDs and
+        imaging sequences. Returns the found patients
+        the subset of patient IDs that were not found.
+        '''
+        requested_ids = set(patient_ids)
+        if len(patient_ids) > 1:
+            pattern = '{' + ','.join(patient_ids) + '}'
+        else:
+            pattern = patient_ids[0]
+        found_patients, found_ids = self.find_patients(pattern, sequences)
+        patients = {
+            pid: p for pid, p in found_patients.items() if pid in requested_ids
+        }
+        missing_ids = requested_ids - set(found_ids) 
+        return patients, missing_ids
+
+    def __len__(self):
+        return len(self.patient_ids)
+
+    def __getitem__(self, idx):
+        return self.patients[self.patient_ids[idx]]
+
+    @property
+    def metadata(self):
+        dfs = []
+        for pid in self.patient_ids:
+            df = self.patients[pid].metadata
+            df['patient_id'] = pid
+            dfs.append(df)
+        df = pd.concat(dfs).reset_index()
+        return df.set_index(['patient_id', 'sequence', 'dimension'])
+
+    def describe(self):
+        dfs = []
+        for pid in progress(self.patient_ids):
+            df = self.patients[pid].describe()
+            df['patient_id'] = pid
+            dfs.append(df)
+        return pd.concat(dfs)
+
+    def load_images(self):
+        for pid in progress(self.patient_ids):
+            self.patients[pid].load_images()
+
+    def preprocess_images(self):
+        model = load_segment_model('cuda', verbose=self.verbose)
+        for pid in progress(self.patient_ids):
+            self.patients[pid].preprocess_images(model=model)
+
+
+class ImagingPatient(object):
     '''
     An object for loading and preprocessing MRI and MRE
     images for a single patient.
@@ -36,15 +153,13 @@ class Patient(object):
         patient_id: Patient ID/subdirectory to locate files.
         sequences: Either a list of requested sequence names,
             or a glob pattern for finding available sequences.
-        xarray_dir: Directory to save and load xarray files.
         verbose: If True, print verbose output.
     '''
     def __init__(
         self,
-        nifti_dir='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
         patient_id='0006',
         sequences=SEQUENCES,
-        xarray_dir='data/NAFLD',
+        nifti_dir='/ocean/projects/asc170022p/shared/Data/MRE/MRE_DICOM_7-31-19/NIFTI',
         verbose=True
     ):
         self.nifti_dir = pathlib.Path(nifti_dir)
@@ -64,7 +179,6 @@ class Patient(object):
                 f'{patient_dir} is missing sequences {missing_sequences}'
             self.sequences = sequences
 
-        self.xarray_dir = pathlib.Path(xarray_dir)
         self.verbose = verbose
 
     def find_sequences(self, pattern='*'):
@@ -204,9 +318,10 @@ class Patient(object):
         self.images[seq] = transform_image(self.images[seq], transform, self.verbose)
 
     def convert_images(self):
-        self.arrays = {}
+        xarrays = {}
         for seq, image in self.images.items():
-            self.arrays[seq] = convert_to_xarray(image, self.verbose)
+            xarrays[seq] = convert_to_xarray(image, self.verbose)
+        return xarrays
 
     def stack_xarrays(self, sequences, normalize=False, downsample=1):
         arrays = []
@@ -227,72 +342,6 @@ class Patient(object):
         dim = xr.DataArray(sequences, dims=['sequence'])
         array = xr.concat(arrays, dim=dim)
         return array.transpose('sequence', 'x', 'y', 'z')
-
-    def save_xarrays(self):
-        self.convert_images()
-        patient_dir = self.xarray_dir / self.patient_id
-        patient_dir.mkdir(parents=True, exist_ok=True)
-        for seq, array in self.arrays.items():
-            nc_file = patient_dir / (seq + '.nc')
-            save_xarray_file(nc_file, array, self.verbose)
-
-    def load_xarrays(self):
-        self.arrays = {}
-        for seq in self.sequences + ['anat_mask', 'mre_mask']:
-            nc_file = self.xarray_dir / self.patient_id / (seq + '.nc')
-            self.arrays[seq] = load_xarray_file(nc_file, self.verbose)
-
-    def eval_baseline(
-        self, order=3, kernel_size=5, rho=1000, frequency=80, polar=False
-    ):
-        u = self.arrays['wave']
-
-        Ku = u.copy()
-        Lu = u.copy()
-        resolution = u.field.spatial_resolution * 1e-3
-        for z in range(u.shape[2]):
-            Ku[...,z] = discrete.savgol_smoothing(
-                u[...,z], order=order, kernel_size=kernel_size
-            )
-            Lu[...,z] = discrete.savgol_laplacian(
-                u[...,z], order=order, kernel_size=kernel_size
-            ) / resolution[0]**2
-
-        Mu = discrete.helmholtz_inversion(Ku, Lu, rho, frequency, polar, eps=1e-5)
-
-        # post-processing
-        Mu.values[Mu.values < 0] = 0
-        a = np.array([1, 2, 3, 2, 1])
-        a = np.einsum('i,j,k->ijk', a, a, a)
-        Mu_median = scipy.ndimage.median_filter(Mu, footprint=a > 2)
-        Mu_outliers = np.abs(Mu - Mu_median) > 1000
-        Mu.values = np.where(Mu_outliers, Mu_median, Mu)
-        Mu.values = scipy.ndimage.gaussian_filter(Mu, sigma=0.65, truncate=3)
-        self.arrays['Kwave'] = Ku
-        self.arrays['Lwave'] = Lu
-        self.arrays['Mwave'] = Mu
-        Mu.name = 'Mwave'
-
-    def view(self, sequences, compare=False, downsample=1):
-        sequences = sequences or self.sequences
-        if compare:
-            array = self.stack_xarrays(
-                sequences, normalize=True, downsample=downsample
-            )
-            viewer = XArrayViewer(array)
-        else:
-            for seq in sequences:
-                viewer = XArrayViewer(self.arrays[seq])
-
-
-def save_xarray_file(nc_file, array, verbose=True):
-    print_if(verbose, f'Writing {nc_file}')
-    array.to_netcdf(nc_file)
-
-
-def load_xarray_file(nc_file, verbose=True):
-    print_if(verbose, f'Loading {nc_file}')
-    return xr.open_dataarray(nc_file)
 
 
 def load_nifti_file(nii_file, verbose=True):
