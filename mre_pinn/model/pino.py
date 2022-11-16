@@ -115,7 +115,7 @@ class HyperCNN(torch.nn.Module):
         self.regularizer = None
 
     def forward(self, inputs, debug=False):
-        u, x = inputs
+        a, u, x = inputs
         h = self.u_cnn(u)
         h = self.u_norm(h)
         h = torch.tanh(h)
@@ -246,17 +246,17 @@ class HyperLinear(torch.nn.Module):
         '''
         Args:
             h: (batch_size, n_latent)
-            x: (batch_size, n_x, n_y, n_z, n_features_in)
+            x: (batch_size, n_points, n_features_in)
         Returns:
-            y: (batch_size, n_x, n_y, n_z, n_features_out)
+            y: (batch_size, n_points, n_features_out)
         '''
         w = self.linear_w(h)
         b = self.linear_b(h)
         n_features_out = b.shape[1]
         n_features_in = w.shape[1] // n_features_out
         w = w.view(-1, n_features_in, n_features_out)
-        b = b.view(-1, 1, 1, 1, n_features_out)
-        return torch.einsum('bxyzi,bio->bxyzo', x, w) + b
+        b = b.view(-1, 1, n_features_out)
+        return torch.einsum('bxi,bio->bxo', x, w) + b
 
 
 class HyperPINN(torch.nn.Module):
@@ -285,9 +285,9 @@ class HyperPINN(torch.nn.Module):
             self.hiddens.append(hidden)
             self.add_module(f'hidden{i}', hidden)
 
-        self.output = HyperLinear(n_latent, n_input, 3)
+        self.output = HyperLinear(n_latent, n_input, 1)
 
-        self.center = torch.zeros(1, 3, dtype=torch.float32)
+        self.center = torch.zeros(1, 1, 3, dtype=torch.float32)
         self.omega = torch.tensor(omega, dtype=torch.float32)
         self.scale = torch.tensor(scale, dtype=torch.float32)
         self.loc = torch.tensor(loc, dtype=torch.float32)
@@ -297,9 +297,9 @@ class HyperPINN(torch.nn.Module):
         '''
         Args:
             h: (batch_size, n_latent)
-            x: (batch_size, n_x, n_y, n_z, 3)
+            x: (batch_size, n_points, 3)
         Returns:
-            y: (batch_size, n_x, n_y, n_z, 1)
+            y: (batch_size, n_points, 1)
         '''
         x = x * self.omega + self.center
 
