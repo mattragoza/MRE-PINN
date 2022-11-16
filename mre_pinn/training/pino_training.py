@@ -15,7 +15,8 @@ class PINOData(deepxde.data.Data):
 
     def __init__(
         self,
-        dataset,
+        train_set,
+        test_set,
         pde,
         loss_weights,
         pde_warmup_iters=10000,
@@ -25,7 +26,8 @@ class PINOData(deepxde.data.Data):
         batch_size=None,
         device='cuda'
     ):
-        self.dataset = dataset
+        self.train_set = train_set
+        self.test_set = test_set
         self.pde = pde
 
         self.loss_weights = loss_weights
@@ -35,13 +37,14 @@ class PINOData(deepxde.data.Data):
         self.pde_init_weight = 1e-19
         self.n_points = n_points
 
-        self.batch_sampler = deepxde.data.BatchSampler(len(dataset), shuffle=True)
+        self.train_sampler = deepxde.data.BatchSampler(len(train_set), shuffle=True)
+        self.test_sampler = deepxde.data.BatchSampler(len(test_set), shuffle=False)
         self.batch_size = batch_size
         self.device = device
 
         print('Precomputing tensors')
-        for idx in range(len(dataset)):
-            self.get_tensors(idx, use_mask=True)
+        for idx in range(len(train_set)):
+            self.get_tensors(train_set, idx, use_mask=True)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a_im, u_im, x = inputs
@@ -67,16 +70,17 @@ class PINOData(deepxde.data.Data):
         ]
 
     @cache
-    def get_tensors(self, idx, use_mask):
+    def get_tensors(self, dataset, idx, use_mask):
         '''
         Args:
+            dataset: Train or test dataset.
             idx: Example index in dataset.
         Returns:
             input: Tuple of input tensors.
             target: Target tensor.
             aux_vars: Tuple of auxiliary tensors.
         '''
-        example = self.dataset[idx]
+        example = dataset[idx]
         a_im = example.anat.values[...,None]
         u_im = example.wave.values[...,None]
         x = example.wave.field.points() * 1e-3
@@ -95,10 +99,13 @@ class PINOData(deepxde.data.Data):
 
         return (a_im, u_im, x), torch.cat([u, mu], dim=-1), ()
 
-    def train_next_batch(self, batch_size=None, use_mask=True, return_inds=False):
+    def next_batch(
+        self, dataset, batch_sampler, batch_size=None, use_mask=True, return_inds=False
+    ):
         '''
         Args:
-            batch_size: Number of patients in batch.
+            dataset: Train or test dataset.
+            batch_size: Number of examples in batch.
         Returns:
             inputs: Tuple of input tensors.
             targets: Tuple of target tensors.
@@ -107,11 +114,11 @@ class PINOData(deepxde.data.Data):
         t_start = time.time()
 
         batch_size = batch_size or self.batch_size
-        batch_inds = self.batch_sampler.get_next(batch_size)
+        batch_inds = batch_sampler.get_next(batch_size)
 
         inputs, targets, aux_vars = [], [], []
         for idx in batch_inds:
-            input, target, aux = self.get_tensors(idx, use_mask)
+            input, target, aux = self.get_tensors(dataset, idx, use_mask)
             if use_mask: # need to subsample points
                 a, u, x = input
                 point_inds = torch.randperm(x.shape[0])[:self.n_points]
@@ -130,16 +137,21 @@ class PINOData(deepxde.data.Data):
         else:
             return inputs, targets, aux_vars
 
+    def train_next_batch(self, batch_size=None):
+        return self.next_batch(self.train_set, self.train_sampler, batch_size)
+
     def test(self, batch_size=1, use_mask=True, return_inds=False):
-        return self.train_next_batch(batch_size, use_mask, return_inds)
+        return self.next_batch(
+            self.test_set, self.test_sampler, batch_size, use_mask, return_inds
+        )
 
 
 class PINOModel(deepxde.Model):
     
-    def __init__(self, dataset, net, pde, **kwargs):
+    def __init__(self, train_set, test_set, net, pde, **kwargs):
 
         # initialize the training data
-        data = PINOData(dataset, pde, **kwargs)
+        data = PINOData(train_set, test_set, pde, **kwargs)
 
         # initialize the network weights
         #TODO net.init_weights()
@@ -190,19 +202,19 @@ class PINOModel(deepxde.Model):
         
         # get model predictions as tensors
         inputs, targets, aux_vars, inds = self.data.test(
-            use_mask=False, return_inds=True
+            batch_size=1, use_mask=False, return_inds=True
         )
         u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(inputs)
         #Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
 
         # get ground truth xarrays
-        a_true  = self.data.dataset[inds[0]].anat
-        u_true  = self.data.dataset[inds[0]].wave
-        mu_true = self.data.dataset[inds[0]].mre
-        a_mask  = self.data.dataset[inds[0]].anat_mask
-        m_mask  = self.data.dataset[inds[0]].mre_mask
-        Lu_true = self.data.dataset[inds[0]].Lwave
-        Mu_base = self.data.dataset[inds[0]].Mwave
+        a_true  = self.data.test_set[inds[0]].anat
+        u_true  = self.data.test_set[inds[0]].wave
+        mu_true = self.data.test_set[inds[0]].mre
+        a_mask  = self.data.test_set[inds[0]].anat_mask
+        m_mask  = self.data.test_set[inds[0]].mre_mask
+        Lu_true = self.data.test_set[inds[0]].Lwave
+        Mu_base = self.data.test_set[inds[0]].Mwave
 
         # apply mask level
         mask_level = 1.0

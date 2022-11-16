@@ -37,7 +37,7 @@ class MREDataset(object):
     def from_xarrays(cls, xarray_dir, verbose=True):
         examples = {}
         example_ids = []
-        for example_id in os.listdir(xarray_dir):
+        for example_id in sorted(os.listdir(xarray_dir)):
             ex = MREExample.from_xarrays(xarray_dir, example_id)
             example_ids.append(example_id)
             examples[example_id] = ex
@@ -49,7 +49,7 @@ class MREDataset(object):
     def __getitem__(self, idx):
         if is_iterable(idx, string_ok=False) or isinstance(idx, slice):
             example_ids = self.example_ids[idx]
-            examples = [self.examples[xid] for xid in example_ids]
+            examples = {xid:self.examples[xid] for xid in example_ids}
             return type(self)(example_ids, examples)
         else:
             return self.examples[self.example_ids[idx]]
@@ -63,6 +63,10 @@ class MREDataset(object):
         for xid in self.example_ids:
             ex = self.examples[xid]
             ex.eval_baseline()
+
+    def shuffle(self, seed=None):
+        np.random.seed(seed)
+        np.random.shuffle(self.example_ids)
 
     def k_fold_split(self, *args, **kwargs):
         k_fold = KFold(*args, **kwargs)
