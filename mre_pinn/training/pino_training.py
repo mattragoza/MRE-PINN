@@ -35,13 +35,13 @@ class PINOData(deepxde.data.Data):
         self.pde_init_weight = 1e-19
         self.n_points = n_points
 
-        self.batch_sampler = deepxde.data.BatchSampler(len(cohort), shuffle=True)
+        self.batch_sampler = deepxde.data.BatchSampler(len(dataset), shuffle=True)
         self.batch_size = batch_size
         self.device = device
 
         print('Precomputing tensors')
-        for i in range(len(cohort)):
-            self.get_tensors(i, use_mask=True)
+        for idx in range(len(dataset)):
+            self.get_tensors(idx, use_mask=True)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a_im, u_im, x = inputs
@@ -201,6 +201,8 @@ class PINOModel(deepxde.Model):
         mu_true = self.data.dataset[inds[0]].mre
         a_mask = self.data.dataset[inds[0]].anat_mask
         m_mask = self.data.dataset[inds[0]].mre_mask
+        Lu_true = self.data.dataset[inds[0]].Lwave
+        Mu_true = self.data.dataset[inds[0]].Mwave
 
         # apply mask level
         mask_level = 1.0

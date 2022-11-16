@@ -240,8 +240,14 @@ class ImagingPatient(object):
         df['count'] = df['count'].astype(int)
         return df
 
-    def preprocess_images(self, model=None):
-
+    def preprocess_images(
+        self,
+        wave_vmax=1e3,
+        same_grid=False,
+        anat_size=(256, 256, 16),
+        mre_size=(256, 256, 4),
+        model=None
+    ):
         # The order of operations warrants some explanation.
         mre_sequences = ['mre_raw', 'wave', 'mre']
         anat_sequences = [s for s in self.sequences if s not in mre_sequences]
@@ -257,7 +263,7 @@ class ImagingPatient(object):
         #   so they are RGB images with text overlays. We convert
         #   the RGB pixels to grayscale using prior knowledge about
         #   the wave image colormap (we don't know the scale...)
-        self.restore_wave_image('wave', vmax=1e3)
+        self.restore_wave_image('wave', vmax=wave_vmax)
 
         # The segmentation model accepts input size of (256, 256, 32),
         #   so we resize the main anatomic image to that size before
@@ -265,7 +271,7 @@ class ImagingPatient(object):
         #   register the main anatomic image to mre_raw so that the 
         #   mask is aligned and we can then aligned the other images.
         main_anat_seq = 't1_pre_out'
-        self.register_images([main_anat_seq], fixed='mre_raw', resize=False)
+        self.register_images([main_anat_seq], fixed='mre_raw', resize=same_grid)
         self.resize_images([main_anat_seq], size=(256, 256, 32))
         self.segment_image(main_anat_seq, model=model)
         self.register_images(['mre_mask'], fixed='mre_raw', resize=True)
@@ -275,8 +281,8 @@ class ImagingPatient(object):
         #   main anatomic image, so all images should now be aligned.
         self.register_images(anat_sequences, fixed=main_anat_seq, resize=True)
 
-        self.resize_images(anat_sequences + ['anat_mask'], size=(256, 256, 16))
-        self.resize_images(mre_sequences + ['mre_mask'], size=(256, 256, 4))
+        self.resize_images(anat_sequences + ['anat_mask'], size=anat_size)
+        self.resize_images(mre_sequences + ['mre_mask'], size=mre_size)
 
         self.correct_metadata(anat_sequences + ['anat_mask'], using='t1_pre_in')
         self.correct_metadata(mre_sequences + ['mre_mask'], using='mre')

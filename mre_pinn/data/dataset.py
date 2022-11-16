@@ -1,9 +1,12 @@
-import pathlib
+import os, pathlib, glob
 import numpy as np
 import xarray as xr
 
-from ..utils import print_if
+from ..utils import print_if, as_xarray
 from ..visual import XArrayViewer
+
+import scipy.ndimage
+from .. import discrete
 
 
 class MREDataset(object):
@@ -22,16 +25,22 @@ class MREDataset(object):
     def from_cohort(cls, cohort):
         examples = {}
         example_ids = []
-        for pid in cohort.patient_ids:
-            patient = cohort.patients[pid]
+        for patient_id in cohort.patient_ids:
+            patient = cohort.patients[patient_id]
             ex = MREExample.from_patient(patient)
-            examples[ex.example_id] = ex
-            example_ids.apppend(ex.example_id)
+            examples[patient_id] = ex
+            example_ids.append(patient_id)
         return cls(examples, example_ids)
 
     @classmethod
-    def from_dir(cls, data_root):
-        pass # TODO
+    def from_xarrays(cls, xarray_dir, verbose=True):
+        examples = {}
+        example_ids = []
+        for example_id in os.listdir(xarray_dir):
+            ex = MREExample.from_xarrays(xarray_dir, example_id)
+            examples[example_id] = ex
+            example_ids.append(example_id)
+        return cls(examples, example_ids)
 
     def __len__(self):
         return len(self.examples)
@@ -43,6 +52,11 @@ class MREDataset(object):
         for xid in self.example_ids:
             ex = self.examples[xid]
             ex.save_xarrays(xarray_dir, verbose)
+
+    def eval_baseline(self):
+        for xid in self.example_ids:
+            ex = self.examples[xid]
+            ex.eval_baseline()
 
     def split(self, k):
         pass # TODO k-fold crossval split
@@ -88,6 +102,10 @@ class MREExample(object):
         anat_mask = xarrays['anat_mask']
         return cls(example_id, anat, wave, mre, mre_mask, anat_mask)
 
+    @property
+    def metadata(self):
+        return self.anat.shape, self.wave.shape, self.mre.shape
+
     def save_xarrays(self, xarray_dir, verbose=True):
         xarray_dir = pathlib.Path(xarray_dir)
         example_dir = xarray_dir / str(self.example_id)
@@ -99,10 +117,11 @@ class MREExample(object):
         save_xarray_file(example_dir / 'anat_mask.nc', self.anat_mask, verbose)
 
     def eval_baseline(
-        self, order=3, kernel_size=5, rho=1000, frequency=80, polar=False
+        self, order=3, kernel_size=5, rho=1e3, frequency=60, polar=False
     ):
-        # Savitsky-Golay smoothing and derivatives
         u = self.wave
+
+        # Savitsky-Golay smoothing and derivatives
         Ku = u.copy()
         Lu = u.copy()
         resolution = u.field.spatial_resolution * 1e-3
@@ -125,15 +144,30 @@ class MREExample(object):
         Mu_outliers = np.abs(Mu - Mu_median) > 1000
         Mu.values = np.where(Mu_outliers, Mu_median, Mu)
         Mu.values = scipy.ndimage.gaussian_filter(Mu, sigma=0.65, truncate=3)
-        self.arrays['Kwave'] = Ku
-        self.arrays['Lwave'] = Lu
-        self.arrays['Mwave'] = Mu
         Mu.name = 'Mwave'
 
-    def view(self):
-        anat_viewer = XArrayViewer(self.anat)
-        wave_viewer = XArrayViewer(self.wave)
-        mre_viewer = XArrayViewer(self.mre)
+        # store results
+        self.Kwave = Ku
+        self.Lwave = Lu
+        self.Mwave = Mu
+
+    def view(self, mask=False):
+        if mask:
+            anat = as_xarray(self.anat * self.anat_mask, like=self.anat)
+            wave = as_xarray(self.wave * self.mre_mask, like=self.wave)
+            mre = as_xarray(self.mre * self.mre_mask, like=self.mre)
+            anat_viewer = XArrayViewer(anat)
+            wave_viewer = XArrayViewer(wave)
+            mre_viewer = XArrayViewer(mre)
+            if hasattr(self, 'Mwave'):
+                Mwave = as_xarray(self.Mwave * self.mre_mask, like=self.mre)
+                base_viewer = XArrayViewer(Mwave)
+        else:
+            anat_viewer = XArrayViewer(self.anat)
+            wave_viewer = XArrayViewer(self.wave)
+            mre_viewer = XArrayViewer(self.mre)
+            if hasattr(self, 'Mwave'):
+                base_viewer = XArrayViewer(self.Mwave)
 
 
 def save_xarray_file(nc_file, array, verbose=True):
