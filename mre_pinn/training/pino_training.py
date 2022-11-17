@@ -3,12 +3,30 @@ from functools import cache
 import numpy as np
 import xarray as xr
 import torch
+import torchvision.transforms.functional as TF
 import deepxde
 
 from ..utils import as_xarray
 from ..pde import laplacian
 from .. import discrete
 from .losses import msae_loss
+
+
+def affine_transform(a, rotate, translate, scale):
+    '''
+    Args:
+        a: (n_x, n_y, n_z, n_channels) input tensor
+        rotate, translate, scale: Transform parameters
+    Returns:
+        t: (n_x, n_y, n_z, n_channels) transformerd tensor
+    '''
+    a = torch.permute(a, (3, 2, 1, 0)) # xyzc->czyx
+    mode = TF.InterpolationMode.BILINEAR
+    b = TF.affine(
+        a, rotate, list(translate), scale, shear=0, interpolation=mode, fill=0
+    )
+    b = torch.permute(a, (3, 2, 1, 0)) # czyx->xyzc
+    return b
 
 
 class PINOData(deepxde.data.Data):
@@ -44,7 +62,9 @@ class PINOData(deepxde.data.Data):
 
         print('Precomputing tensors')
         for idx in range(len(train_set)):
-            self.get_tensors(train_set, idx, use_mask=True)
+            self.get_raw_tensors(train_set, idx)
+        for idx in range(len(test_set)):
+            self.get_raw_tensors(test_set, idx)
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a_im, u_im, x = inputs
@@ -70,37 +90,70 @@ class PINOData(deepxde.data.Data):
         ]
 
     @cache
-    def get_tensors(self, dataset, idx, use_mask):
+    def get_raw_tensors(self, dataset, idx):
         '''
         Args:
             dataset: Train or test dataset.
             idx: Example index in dataset.
         Returns:
-            input: Tuple of input tensors.
-            target: Target tensor.
-            aux_vars: Tuple of auxiliary tensors.
+            a, u, x, mu, mask: Raw tensors
         '''
-        example = dataset[idx]
-        a_im = example.anat.values[...,None]
-        u_im = example.wave.values[...,None]
-        x = example.wave.field.points() * 1e-3
-        u = example.wave.field.values()
-        mu = example.mre.field.values()
-        if use_mask:
-            mask = example.mre_mask.values.reshape(-1).astype(bool)
-            x, u, mu = x[mask], u[mask], mu[mask]
+        example_id = dataset.example_ids[idx]
+        example = dataset.examples[example_id]
 
-        # convert arrays to tensors
-        a_im = torch.tensor(a_im, device=self.device, dtype=torch.float32)
-        u_im = torch.tensor(u_im, device=self.device, dtype=torch.float32)
-        x = torch.tensor(x, device=self.device, dtype=torch.float32)
+        # get numpy arrays from data example
+        #   ensure that they have a channel dim
+        a = example.anat.transpose('x', 'y', 'z', 'sequence').values
+        u = example.wave.values[...,None]
+        x = example.wave.field.points(reshape=False) * 1e-3
+        mu = example.mre.values[...,None]
+        mask = example.mre_mask.values
+
+        # convert arrays to tensors on appropriate device
+        a = torch.tensor(a, device=self.device, dtype=torch.float32)
         u = torch.tensor(u, device=self.device, dtype=torch.float32)
+        x = torch.tensor(x, device=self.device, dtype=torch.float32)
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
+        mask = torch.tensor(u, device=self.device, dtype=torch.bool)
 
-        return (a_im, u_im, x), torch.cat([u, mu], dim=-1), ()
+        return a, u, x, mu, mask
 
-    def next_batch(
-        self, dataset, batch_sampler, batch_size=None, use_mask=True, return_inds=False
+    def get_tensors(self, dataset, idx, augment, use_mask):
+        
+        a_im, u_im, x_im, mu_im, mask = self.get_raw_tensors(dataset, idx)
+
+        if augment: # apply data augmentation
+            rotate = np.random.uniform(-8, 8, 1)[0]
+            translate = np.random.uniform(-10, 10, 2)
+            scale = np.random.uniform(0.9, 1.1, 1)[0]
+            a_im = affine_transform(a_im, rotate, translate, scale)
+            u_im = affine_transform(u_im, rotate, translate, scale)
+            x_im = affine_transform(x_im, -rotate, -translate, 1 / scale)
+
+        # reshape field points and values
+        x = x_im.view(-1, 3)
+        u = u_im.view(-1, 1)
+        mu = mu_im.view(-1, 1)
+        mask = mask.view(-1)
+
+        if use_mask: # apply mask and subsample points
+            x, u, mu = x[mask], u[mask], mu[mask]
+            sample = torch.randperm(x.shape[0])[:self.n_points]
+            x, u, mu = x[sample], u[sample], mu[sample]
+
+        input_ = (a_im, u_im, x)
+        target = torch.cat([u, mu], dim=-1)
+        aux_var = ()
+        return input_, target, aux_var
+
+    def get_next_batch(
+        self,
+        dataset,
+        batch_sampler,
+        batch_size=None,
+        augment=True,
+        use_mask=True,
+        return_inds=False
     ):
         '''
         Args:
@@ -118,12 +171,8 @@ class PINOData(deepxde.data.Data):
 
         inputs, targets, aux_vars = [], [], []
         for idx in batch_inds:
-            input, target, aux = self.get_tensors(dataset, idx, use_mask)
-            if use_mask: # need to subsample points
-                a, u, x = input
-                point_inds = torch.randperm(x.shape[0])[:self.n_points]
-                input = (a, u, x[point_inds])
-                target = target[point_inds]
+            input, target, aux = self.get_tensors(dataset, idx, augment, use_mask)
+
             inputs.append(input)
             targets.append(target)
             aux_vars.append(aux)
@@ -138,11 +187,11 @@ class PINOData(deepxde.data.Data):
             return inputs, targets, aux_vars
 
     def train_next_batch(self, batch_size=None):
-        return self.next_batch(self.train_set, self.train_sampler, batch_size)
+        return self.get_next_batch(self.train_set, self.train_sampler, batch_size)
 
-    def test(self, batch_size=1, use_mask=True, return_inds=False):
-        return self.next_batch(
-            self.test_set, self.test_sampler, batch_size, use_mask, return_inds
+    def test(self, batch_size=1, **kwargs):
+        return self.get_next_batch(
+            self.test_set, self.test_sampler, batch_size, **kwargs
         )
 
 
@@ -202,7 +251,7 @@ class PINOModel(deepxde.Model):
         
         # get model predictions as tensors
         inputs, targets, aux_vars, inds = self.data.test(
-            batch_size=1, use_mask=False, return_inds=True
+            augment=False, use_mask=False, return_inds=True
         )
         u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(inputs)
         #Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
