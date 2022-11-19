@@ -1,4 +1,4 @@
-import pathlib, urllib
+import sys, pathlib, urllib
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -6,6 +6,7 @@ import scipy.io
 import scipy.ndimage
 import skimage.draw
 
+from .dataset import MREDataset
 from ..utils import print_if, as_xarray
 from ..visual import XArrayViewer
 from .. import discrete
@@ -26,10 +27,11 @@ class BIOQICSample(object):
     def download(self, verbose=True):
         url = f'https://bioqic-apps.charite.de/DownloadSamples?file={self.mat_base}'
         print_if(verbose, f'Downloading {url}')
+        self.download_dir.mkdir(exist_ok=True)
         urllib.request.urlretrieve(url, self.mat_file)
 
-    def load_mat_data(self, verbose=True):
-        data, rev_axes = load_mat_data(self.mat_file, verbose)
+    def load_mat(self, verbose=True):
+        data, rev_axes = load_mat_file(self.mat_file, verbose)
 
         wave = data[self.wave_var].T if rev_axes else mat[wave_var]
         wave = self.add_metadata(wave)
@@ -42,7 +44,7 @@ class BIOQICSample(object):
 
         print_if(verbose, self.arrays)
 
-    def preprocess_arrays(self, verbose=True):
+    def preprocess(self, verbose=True):
         self.segment_regions(verbose)
         self.create_elastogram(verbose)
         self.preprocess_wave_image(verbose)
@@ -71,13 +73,17 @@ class BIOQICSample(object):
         Mu = discrete.helmholtz_inversion(Ku, Lu, polar)
         self.arrays['Kwave'] = Ku
         self.arrays['Lwave'] = Lu
-        self.arrays['Mwave'] = Mu 
+        self.arrays['Mwave'] = Mu
 
     def view(self, *args, **kwargs):
         if not args:
             args = self.arrays.keys()
         for arg in args:
             viewer = XArrayViewer(self.arrays[arg], **kwargs)
+
+    def to_dataset(self):
+        return MREDataset.from_bioqic(self)
+
 
 
 class BIOQICFEMBox(BIOQICSample):
@@ -147,7 +153,6 @@ class BIOQICFEMBox(BIOQICSample):
         mu = np.array(
             [0, 3e3, 10e3, 10e3, 10e3, 10e3]
         )[spatial_region][np.newaxis,...,]
-        print(mu.shape)
 
         axes = tuple(range(1, mu.ndim))
         omega = 2 * np.pi * wave.frequency
@@ -463,7 +468,7 @@ def load_np_data(np_file, verbose=False):
     return a
 
 
-def load_mat_data(mat_file, verbose=False):
+def load_mat_file(mat_file, verbose=False):
     '''
     Load data set from MATLAB file.
     Args:

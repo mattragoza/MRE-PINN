@@ -6,8 +6,8 @@ import scipy.ndimage
 import skimage
 import SimpleITK as sitk
 import torch
-#torch.backends.cudnn.enabled = True
 
+from .dataset import MREDataset
 from .segment import UNet3D
 from ..utils import print_if, progress, braced_glob, as_path_list
 from ..visual import XArrayViewer
@@ -141,6 +141,9 @@ class ImagingCohort(object):
         model = load_segment_model('cuda', verbose=self.verbose)
         for pid in progress(self.patient_ids):
             self.patients[pid].preprocess_images(model=model)
+
+    def to_dataset(self):
+        return MREDataset.from_cohort(self)
 
 
 class ImagingPatient(object):
@@ -348,6 +351,16 @@ class ImagingPatient(object):
         dim = xr.DataArray(sequences, dims=['sequence'])
         array = xr.concat(arrays, dim=dim)
         return array.transpose('sequence', 'x', 'y', 'z')
+
+    def to_dataset(self):
+        examples = {}
+        example_ids = []
+        for patient_id in cohort.patient_ids:
+            patient = cohort.patients[patient_id]
+            ex = MREExample.from_patient(patient)
+            example_ids.append(patient_id)
+            examples[patient_id] = ex
+        return cls(example_ids, examples)
 
 
 def load_nifti_file(nii_file, verbose=True):

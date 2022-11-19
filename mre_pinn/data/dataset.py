@@ -20,28 +20,37 @@ class MREDataset(object):
 
     @classmethod
     def from_bioqic(cls, bioqic):
-        pass # TODO
+        examples = {}
+        example_ids = []
+        for frequency in bioqic.arrays.frequency:
+            ex = MREExample.from_bioqic(bioqic, frequency)
+            example_ids.append(ex.example_id)
+            examples[ex.example_id] = ex
+        return MREDataset(example_ids, examples)
 
     @classmethod
     def from_cohort(cls, cohort):
         examples = {}
-        example_ids = []
-        for patient_id in cohort.patient_ids:
-            patient = cohort.patients[patient_id]
-            ex = MREExample.from_patient(patient)
-            example_ids.append(patient_id)
-            examples[patient_id] = ex
-        return cls(example_ids, examples)
+        example_ids = {}
+        for pid in cohort.patient_ids:
+            ex = MREExample.from_patient(cohort.patients[pid])
+            example_ids.append(ex.example_id)
+            examples[ex.example_id] = ex
+        return MREDataset(example_ids, examples)
 
     @classmethod
-    def from_xarrays(cls, xarray_dir, verbose=True):
+    def load_xarrays(cls, xarray_dir, anat=False, verbose=True):
         examples = {}
         example_ids = []
-        for example_id in sorted(os.listdir(xarray_dir)):
-            ex = MREExample.from_xarrays(xarray_dir, example_id)
-            example_ids.append(example_id)
-            examples[example_id] = ex
-        return cls(example_ids, examples)
+        for sub_dir in sorted(os.listdir(xarray_dir)):
+            ex = MREExample.load_xarrays(xarray_dir, sub_dir, anat)
+            example_ids.append(ex.example_id)
+            examples[ex.example_id] = ex
+        return MREDataset(example_ids, examples)
+
+    def save_xarrays(self, xarray_dir, verbose=True):
+        for xid in self.example_ids:
+            self.examples[xid].save_xarrays(xarray_dir, verbose)
 
     def __len__(self):
         return len(self.examples)
@@ -50,14 +59,9 @@ class MREDataset(object):
         if is_iterable(idx, string_ok=False) or isinstance(idx, slice):
             example_ids = self.example_ids[idx]
             examples = {xid:self.examples[xid] for xid in example_ids}
-            return type(self)(example_ids, examples)
+            return MREDataset(example_ids, examples)
         else:
             return self.examples[self.example_ids[idx]]
-
-    def save_xarrays(self, xarray_dir, verbose=True):
-        for xid in self.example_ids:
-            ex = self.examples[xid]
-            ex.save_xarrays(xarray_dir, verbose)
 
     def eval_baseline(self):
         for xid in self.example_ids:
@@ -87,19 +91,15 @@ class MREExample(object):
         self.anat_mask = anat_mask
 
     @classmethod
-    def from_xarrays(cls, xarray_dir, example_id, verbose=True):
-        xarray_dir = pathlib.Path(xarray_dir)
-        example_dir = xarray_dir / str(example_id)
-        anat = load_xarray_file(example_dir / 'anat.nc', verbose)
-        wave = load_xarray_file(example_dir / 'wave.nc', verbose)
-        mre = load_xarray_file(example_dir / 'mre.nc', verbose)
-        mre_mask = load_xarray_file(example_dir / 'mre_mask.nc', verbose)
-        anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
+    def from_bioqic(cls, bioqic, frequency):
+        example_id = str(frequency.item())
+        arrays = bioqic.arrays.sel(frequency=frequency)
+        anat = arrays['anat'] if bioqic.anat_var else None
+        wave = arrays['wave']
+        mre  = arrays['mu']
+        mre_mask = arrays['spatial_region']
+        anat_mask = arrays['spatial_region'] if bioqic.anat_var else None
         return cls(example_id, anat, wave, mre, mre_mask, anat_mask)
-
-    @classmethod
-    def from_bioqic(self, bioqic):
-        pass # TODO
 
     @classmethod
     def from_patient(cls, patient):
@@ -114,19 +114,34 @@ class MREExample(object):
         anat_mask = xarrays['anat_mask']
         return cls(example_id, anat, wave, mre, mre_mask, anat_mask)
 
+    @classmethod
+    def load_xarrays(cls, xarray_dir, example_id, anat=False, verbose=True):
+        xarray_dir  = pathlib.Path(xarray_dir)
+        example_dir = xarray_dir / str(example_id)
+        if anat:
+            anat = load_xarray_file(example_dir / 'anat.nc', verbose)
+            anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
+        else:
+            anat = anat_mask = None
+        wave = load_xarray_file(example_dir / 'wave.nc', verbose)
+        mre  = load_xarray_file(example_dir / 'mre.nc',  verbose)
+        mre_mask  = load_xarray_file(example_dir / 'mre_mask.nc',  verbose)
+        return cls(example_id, anat, wave, mre, mre_mask, anat_mask)
+
+    def save_xarrays(self, xarray_dir, verbose=True):
+        xarray_dir  = pathlib.Path(xarray_dir)
+        example_dir = xarray_dir / str(self.example_id)
+        example_dir.mkdir(parents=True, exist_ok=True)
+        if self.anat is not None:
+            save_xarray_file(example_dir / 'anat.nc', self.anat, verbose)
+            save_xarray_file(example_dir / 'anat_mask.nc', self.anat_mask, verbose)
+        save_xarray_file(example_dir / 'wave.nc', self.wave, verbose)
+        save_xarray_file(example_dir / 'mre.nc',  self.mre,  verbose)
+        save_xarray_file(example_dir / 'mre_mask.nc',  self.mre_mask,  verbose)
+
     @property
     def metadata(self):
         return self.anat.shape, self.wave.shape, self.mre.shape
-
-    def save_xarrays(self, xarray_dir, verbose=True):
-        xarray_dir = pathlib.Path(xarray_dir)
-        example_dir = xarray_dir / str(self.example_id)
-        example_dir.mkdir(parents=True, exist_ok=True)
-        save_xarray_file(example_dir / 'anat.nc', self.anat, verbose)
-        save_xarray_file(example_dir / 'wave.nc', self.wave, verbose)
-        save_xarray_file(example_dir / 'mre.nc', self.mre, verbose)
-        save_xarray_file(example_dir / 'mre_mask.nc', self.mre_mask, verbose)
-        save_xarray_file(example_dir / 'anat_mask.nc', self.anat_mask, verbose)
 
     def eval_baseline(
         self, order=3, kernel_size=5, rho=1e3, frequency=60, polar=False
@@ -165,14 +180,14 @@ class MREExample(object):
 
     def view(self, mask=False):
         if mask:
-            anat = as_xarray(self.anat * self.anat_mask, like=self.anat)
-            wave = as_xarray(self.wave * self.mre_mask, like=self.wave)
-            mre = as_xarray(self.mre * self.mre_mask, like=self.mre)
+            anat = as_xarray(self.anat * (self.anat_mask > 0), like=self.anat)
+            wave = as_xarray(self.wave * (self.mre_mask > 0), like=self.wave)
+            mre = as_xarray(self.mre * (self.mre_mask > 0), like=self.mre)
             anat_viewer = XArrayViewer(anat)
             wave_viewer = XArrayViewer(wave)
             mre_viewer = XArrayViewer(mre)
             if hasattr(self, 'Mwave'):
-                Mwave = as_xarray(self.Mwave * self.mre_mask, like=self.mre)
+                Mwave = as_xarray(self.Mwave * (self.mre_mask > 0), like=self.mre)
                 base_viewer = XArrayViewer(Mwave)
         else:
             anat_viewer = XArrayViewer(self.anat)
@@ -184,9 +199,18 @@ class MREExample(object):
 
 def save_xarray_file(nc_file, array, verbose=True):
     print_if(verbose, f'Writing {nc_file}')
+    if np.iscomplexobj(array):
+        new_dim = xr.DataArray(['real', 'imag'], dims=['part'])
+        array = xr.concat([array.real, array.imag], dim=new_dim)
     array.to_netcdf(nc_file)
 
 
 def load_xarray_file(nc_file, verbose=True):
     print_if(verbose, f'Loading {nc_file}')
-    return xr.open_dataarray(nc_file)
+    array = xr.open_dataarray(nc_file)
+    if 'part' in array.dims:
+        real = array.sel(part='real')
+        imag = array.sel(part='imag')
+        return real + 1j * imag
+    else:
+        return array
