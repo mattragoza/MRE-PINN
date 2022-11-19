@@ -85,7 +85,6 @@ class BIOQICSample(object):
         return MREDataset.from_bioqic(self)
 
 
-
 class BIOQICFEMBox(BIOQICSample):
 
     def __init__(self, download_dir):
@@ -138,7 +137,6 @@ class BIOQICFEMBox(BIOQICSample):
         mask = as_xarray(np.broadcast_to(mask, u.shape), like=u)
         mask.name = 'spatial_region'
         self.arrays['spatial_region'] = mask
-
         self.arrays = self.arrays.assign_coords(
             spatial_region=self.arrays.spatial_region
         )
@@ -235,7 +233,6 @@ class BIOQICPhantom(BIOQICSample):
         mask = as_xarray(mask, like=a)
         mask.name = 'spatial_region'
         self.arrays['spatial_region'] = mask
-
         self.arrays = self.arrays.assign_coords(
             spatial_region=self.arrays.spatial_region
         )
@@ -272,7 +269,7 @@ class BIOQICPhantom(BIOQICSample):
         } 
         mu = xr.DataArray(mu, dims=dims, coords=coords)
         mu.name = 'elastogram'
-        self.arrays['mre'] = mu
+        self.arrays['mu'] = mu
 
     def preprocess_wave_image(
         self, sigma=0.65, truncate=3, threshold=100, order=1, verbose=True

@@ -1,6 +1,7 @@
 import os, pathlib, glob
 import numpy as np
 import xarray as xr
+import pandas as pd
 from sklearn.model_selection import KFold
 
 from ..utils import print_if, as_xarray, is_iterable
@@ -52,6 +53,25 @@ class MREDataset(object):
         for xid in self.example_ids:
             self.examples[xid].save_xarrays(xarray_dir, verbose)
 
+    @property
+    def metadata(self):
+        dfs = []
+        for xid in self.example_ids:
+            df = self.examples[xid].metadata
+            df['example_id'] = xid
+            dfs.append(df)
+        df = pd.concat(dfs).reset_index()
+        return df.set_index(['example_id', 'variable', 'dimension'])
+
+    def describe(self):
+        dfs = []
+        for xid in self.example_ids:
+            df = self.examples[xid].describe()
+            df['example_id'] = xid
+            dfs.append(df)
+        df = pd.concat(dfs).reset_index()
+        return df.set_index(['example_id', 'variable'])
+
     def __len__(self):
         return len(self.examples)
 
@@ -89,6 +109,17 @@ class MREExample(object):
         self.mre = mre
         self.mre_mask = mre_mask
         self.anat_mask = anat_mask
+
+    @property
+    def has_anat(self):
+        return self.anat is not None
+
+    @property
+    def var_names(self):
+        if self.has_anat:
+            return ['anat', 'wave', 'mre']
+        else:
+            return ['wave', 'mre']
 
     @classmethod
     def from_bioqic(cls, bioqic, frequency):
@@ -141,14 +172,45 @@ class MREExample(object):
 
     @property
     def metadata(self):
-        return self.anat.shape, self.wave.shape, self.mre.shape
+        index_cols = ['variable', 'dimension']
+        df = pd.DataFrame(columns=index_cols).set_index(index_cols)
+        for var in self.var_names:
+            array = getattr(self, var)
+            shape = array.field.spatial_shape
+            res = array.field.spatial_resolution
+            origin = array.field.origin
+            for i, dim in enumerate(array.field.spatial_dims):
+                df.loc[(var, dim), 'size'] = shape[i]
+                df.loc[(var, dim), 'spacing'] = res[i]
+                df.loc[(var, dim), 'origin'] = origin[i]
+        df['size'] = df['size'].astype(int)
+        df['limit'] = df['origin'] + (df['size'] - 1) * df['spacing']
+        df['center'] = df['origin'] + (df['size'] - 1) / 2 * df['spacing']
+        df['extent'] = df['limit'] - df['origin'] + df['spacing']
+        return df
+
+    def describe(self):
+        index_cols = ['variable']
+        df = pd.DataFrame(columns=index_cols).set_index(index_cols)
+        for var in self.var_names:
+            array = getattr(self, var).values
+            df.loc[var, 'dtype'] = array.dtype
+            df.loc[var, 'count'] = array.size
+            df.loc[var, 'mean'] = array.mean()
+            df.loc[var, 'std'] = array.std()
+            df.loc[var, 'min'] = array.min()
+            df.loc[var, '25%'] = np.percentile(array, 25)
+            df.loc[var, '50%'] = np.percentile(array, 50)
+            df.loc[var, '75%'] = np.percentile(array, 75)
+            df.loc[var, 'max'] = array.max()
+        df['count'] - df['count'].astype(int)
+        return df
 
     def eval_baseline(
         self, order=3, kernel_size=5, rho=1e3, frequency=60, polar=False
     ):
-        u = self.wave
-
         # Savitsky-Golay smoothing and derivatives
+        u = self.wave
         Ku = u.copy()
         Lu = u.copy()
         resolution = u.field.spatial_resolution * 1e-3

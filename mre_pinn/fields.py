@@ -62,6 +62,10 @@ class FieldAccessor(object):
         return len(self.xarray.field.spatial_dims)
 
     @property
+    def origin(self):
+        return [self.xarray[d].min() for d in self.spatial_dims]
+
+    @property
     def spatial_shape(self):
         spatial_dims = self.xarray.field.spatial_dims
         return tuple(self.xarray.sizes[d] for d in spatial_dims)
