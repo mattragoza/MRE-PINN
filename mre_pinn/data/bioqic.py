@@ -1,76 +1,339 @@
-import pathlib
+import pathlib, urllib
 import numpy as np
 import pandas as pd
 import xarray as xr
 import scipy.io
 import scipy.ndimage
+import skimage.draw
 
 from ..utils import print_if, as_xarray
 from ..visual import XArrayViewer
 from .. import discrete
 
 
-class BIOQICDataset(object):
+class BIOQICSample(object):
+    '''
+    An MRE sample dataset from https://bioqic-apps.charite.de/.
+    '''
+    @property
+    def mat_base(self):
+        return self.mat_name + '.mat'
 
-    def __init__(self, data_root, data_name, verbose=True):
-        self.data_root = data_root
-        self.data_name = data_name
+    @property
+    def mat_file(self):
+        return self.download_dir / self.mat_base
 
-    def load_arrays(self):
+    def download(self, verbose=True):
+        url = f'https://bioqic-apps.charite.de/DownloadSamples?file={self.mat_base}'
+        print_if(verbose, f'Downloading {url}')
+        urllib.request.urlretrieve(url, self.mat_file)
+
+    def load_mat_data(self, verbose=True):
+        data, rev_axes = load_mat_data(self.mat_file, verbose)
+
+        wave = data[self.wave_var].T if rev_axes else mat[wave_var]
+        wave = self.add_metadata(wave)
+        self.arrays = xr.Dataset(dict(wave=wave))
+
+        if self.anat_var is not None:
+            anat = data[self.anat_var].T if rev_axes else mat[anat_var]
+            anat = self.add_metadata(anat)
+            self.arrays['anat'] = anat
+
+        print_if(verbose, self.arrays)
+
+    def preprocess_arrays(self, verbose=True):
+        self.segment_regions(verbose)
+        self.create_elastogram(verbose)
+        self.preprocess_wave_image(verbose)
+
+    def select_data_subset(self, frequency, xyz_slice, verbose=True):
+        self.arrays, ndim = select_data_subset(
+            self.arrays, frequency, xyz_slice, verbose=verbose
+        )
+
+    def spatial_downsample(self, factor, verbose=True):
+        print_if(verbose, 'Spatial downsampling')
+        factors = {d: factor for d in self.arrays.field.spatial_dims}
+        arrays = self.arrays.coarsen(boundary='trim', **factors).mean()
+        arrays['spatial_region'] = self.arrays.spatial_region.coarsen(
+            boundary='trim', **factors
+        ).max()
+        self.arrays = arrays
+
+    def eval_baseline(self, order=3, kernel_size=5, polar=True, verbose=True):
+        print_if(verbose, 'Evaluating baseline method')
+
+        # direct Helmholtz inversion via discrete laplacian
+        u = self.arrays.u
+        Ku = discrete.savgol_smoothing(u, order, kernel_size)
+        Lu = discrete.savgol_laplacian(u, order, kernel_size)
+        Mu = discrete.helmholtz_inversion(Ku, Lu, polar)
+        self.arrays['Kwave'] = Ku
+        self.arrays['Lwave'] = Lu
+        self.arrays['Mwave'] = Mu 
+
+    def view(self, *args, **kwargs):
+        if not args:
+            args = self.arrays.keys()
+        for arg in args:
+            viewer = XArrayViewer(self.arrays[arg], **kwargs)
+
+
+class BIOQICFEMBox(BIOQICSample):
+
+    def __init__(self, download_dir):
+        self.download_dir = pathlib.Path(download_dir)
+
+    @property
+    def mat_name(self):
+        return 'four_target_phantom'
+
+    @property
+    def anat_var(self):
+        return None
+
+    @property
+    def wave_var(self):
+        return 'u_ft'
+
+    def add_metadata(self, array):
+        resolution = 1e-3 # meters
+        dims = ['frequency', 'component', 'z', 'x', 'y']
+        coords = {
+            'frequency': np.arange(50, 101, 10), # Hz
+            'x': np.arange(80)  * resolution,
+            'y': np.arange(100) * resolution,
+            'z': np.arange(10)  * resolution,
+            'component': ['y', 'x', 'z'],
+        }
+        array = xr.DataArray(array, dims=dims, coords=coords)
+        return array.transpose('frequency', 'x', 'y', 'z', 'component')
+
+    def segment_regions(self, verbose=True):
+        
+        print_if(verbose, 'Segmenting spatial regions')
+        u = self.arrays.wave.mean(['frequency', 'component'])
+
+        matrix_mask = np.ones((80, 100), dtype=int)
+        disk_mask = np.zeros((80, 100), dtype=int)
+        disks = [
+            skimage.draw.disk(center=(39.4, 76.6), radius=10),
+            skimage.draw.disk(center=(39.5, 50.2), radius=5),
+            skimage.draw.disk(center=(39.5, 31.9), radius=2),
+            skimage.draw.disk(center=(39.5, 19.8), radius=1),
+        ]
+        disk_mask[disks[0]] = 1
+        disk_mask[disks[1]] = 2
+        disk_mask[disks[2]] = 3
+        disk_mask[disks[3]] = 4
+
+        mask = (matrix_mask + disk_mask)[:,:,np.newaxis]
+        mask = as_xarray(np.broadcast_to(mask, u.shape), like=u)
+        mask.name = 'spatial_region'
+        self.arrays['spatial_region'] = mask
+
+        self.arrays = self.arrays.assign_coords(
+            spatial_region=self.arrays.spatial_region
+        )
+
+    def create_elastogram(self, verbose=True):
+
+        print_if(verbose, 'Creating ground truth elastogram')
+        spatial_region = self.arrays.spatial_region
+        wave = self.arrays.wave
+
+        # ground truth physical parameters
+        mu = np.array(
+            [0, 3e3, 10e3, 10e3, 10e3, 10e3]
+        )[spatial_region][np.newaxis,...,]
+        print(mu.shape)
+
+        axes = tuple(range(1, mu.ndim))
+        omega = 2 * np.pi * wave.frequency
+        omega = np.expand_dims(omega, axis=axes)
+
+        # Voigt model
+        eta = 1 # Pa·s
+        mu = mu + 1j * omega * eta
+        mu = as_xarray(mu, like=wave.mean(['component']))
+        mu.name = 'elastogram'
+        self.arrays['mu'] = mu
+
+    def preprocess_wave_image(self, verbose=True):
         pass
 
-    def preprocess_arrays(self):
-        pass
 
-    def view(self):
-        pass
+class BIOQICPhantom(BIOQICSample):
 
+    def __init__(self, download_dir, which='unwrapped_dejittered'):
+        self.download_dir = pathlib.Path(download_dir)
+        self.which = which
 
-def load_bioqic_dataset(
-    data_root,
-    data_name,
-    frequency=None,
-    xyz_slice=None,
-    downsample=2,
-    noise_ratio=0,
-    baseline=True,
-    verbose=True
-):
-    if data_name == 'fem_box':
-        data = load_bioqic_fem_box_data(data_root, verbose)
-    elif data_name.startswith('phantom'):
-        which = data_name[len('phantom'):].strip('_')
-        data = load_bioqic_phantom_data(data_root, which, verbose)
-    else:
-        raise ValueError(f'unrecognized data name: {data_name}')
+    @property
+    def mat_name(self):
+        return f'phantom_{self.which}'
 
-    # select data subset
-    data, ndim = select_data_subset(data, frequency, xyz_slice, verbose=verbose)
+    @property
+    def anat_var(self):
+        return 'magnitude'
 
-    # convert region to a coordinate label
-    if 'spatial_region' in data:
-        data = data.assign_coords(spatial_region=data.spatial_region)
+    @property
+    def wave_var(self):
+        return {
+            'raw_complex': 'cube',
+            'raw': 'phase',
+            'unwrapped': 'phase_unwrapped',
+            'unwrapped_dejittered': 'phase_unwrap_noipd'
+        }[self.which]
 
-    print_if(verbose, data)
+    def add_metadata(self, array):
+        resolution = 1.5e-3 # meters
+        dims = ['frequency', 'component', 't', 'z', 'x', 'y']
+        coords = {
+            'frequency': np.arange(30, 101, 10), # Hz
+            't': np.arange(8),
+            'x': np.arange(128) * resolution,
+            'y': np.arange(80)  * resolution,
+            'z': np.arange(25)  * resolution,
+            'component': ['z', 'x', 'y'],
+        }
+        array = xr.DataArray(array, dims=dims, coords=coords)
+        return array.transpose('frequency', 't', 'x', 'y', 'z', 'component')
 
-    # add complex-valued noise to wave image
-    if noise_ratio > 0:
-        data['u'] = add_complex_noise(data['u'], noise_ratio)
+    def segment_regions(self, sigma=0.8, threshold=280, verbose=True):
 
-    if baseline: # direct Helmholtz inversion via discrete laplacian
-        data['Ku'] = discrete.savgol_smoothing(data['u'], order=3, kernel_size=5)
-        data['Lu'] = discrete.savgol_laplacian(data['u'], order=3, kernel_size=5)
-        data['Mu'] = discrete.helmholtz_inversion(data['Ku'], data['Lu'], polar=True)
+        print_if(verbose, 'Segmenting spatial regions')
+        a = self.arrays.anat.mean(['frequency', 't', 'component'])
 
-    if downsample: # spatial downsampling
-        downsample = {d: downsample for d in data.field.spatial_dims}
-        test_data = data.coarsen(boundary='trim', **downsample).mean()
-        test_data['spatial_region'] = \
-            data.spatial_region.coarsen(boundary='trim', **downsample).max()
-        test_data = test_data.assign_coords(spatial_region=test_data.spatial_region)
-        data = test_data
+        # distinguish phantom from background
+        matrix_mask = (
+            scipy.ndimage.gaussian_filter(a, sigma=sigma) > threshold
+        ).astype(int)
+        r, c = skimage.draw.rectangle(start=(25,15), end=(103,65))
+        matrix_mask[r,c,:] = 1
 
-    return data
+        # identify cylindrical inclusions
+        disk_mask = np.zeros((128, 80), dtype=int)
+        disks = [
+            skimage.draw.disk(center=(50.0, 31.0), radius=4),
+            skimage.draw.disk(center=(77.0, 31.0), radius=4),
+            skimage.draw.disk(center=(50.0, 50.5), radius=4),
+            skimage.draw.disk(center=(75.0, 53.5), radius=4),
+        ]
+        disk_mask[disks[0]] = 1
+        disk_mask[disks[1]] = 2
+        disk_mask[disks[2]] = 3
+        disk_mask[disks[3]] = 4
+
+        mask = matrix_mask + disk_mask[:,:,np.newaxis]
+        mask = as_xarray(mask, like=a)
+        mask.name = 'spatial_region'
+        self.arrays['spatial_region'] = mask
+
+        self.arrays = self.arrays.assign_coords(
+            spatial_region=self.arrays.spatial_region
+        )
+
+    def create_elastogram(self, verbose=True):
+
+        print_if(verbose, 'Creating ground truth elastogram')
+        spatial_region = self.arrays.spatial_region
+        wave = self.arrays.wave
+        
+        # ground truth physical parameters
+        mu = np.array(
+            [0, 10830, 43301, 5228, 6001, 16281]
+        )[spatial_region][np.newaxis,...]
+
+        alpha = np.array(
+            [0, 0.0226, 0.0460, 0.0272, 0.0247, 0.0345]
+        )[spatial_region][np.newaxis,...]
+
+        axes = tuple(range(1, mu.ndim))
+        omega = 2 * np.pi * wave.frequency
+        omega = np.expand_dims(omega, axis=axes)
+
+        # springpot model
+        eta = 1 # Pa·s
+        mu = mu**(1 - alpha) * (1j * omega * eta)**alpha
+
+        dims = ['frequency', 'x', 'y', 'z']
+        coords = {
+            'frequency': wave.frequency,
+            'x': wave.x,
+            'y': wave.y,
+            'z': wave.z
+        } 
+        mu = xr.DataArray(mu, dims=dims, coords=coords)
+        mu.name = 'elastogram'
+        self.arrays['mre'] = mu
+
+    def preprocess_wave_image(
+        self, sigma=0.65, truncate=3, threshold=100, order=1, verbose=True
+    ):
+        '''
+        Args:
+            sigma: Standard deviation for Gaussian filter.
+            truncate: Truncate argument for Gaussian filter.
+            threshold: Cutoff frequency for low-pass filter.
+            order: Frequency roll-off rate for low-pass filter.
+        '''
+        print_if(verbose, 'Preprocessing wave image')
+
+        u = self.arrays.wave
+        resolution = u.field.spatial_resolution
+
+        # we estimate and remove the phase shift between images
+        #   and we extract the fundamental frequency across time
+        #   and we do some noise reduction
+
+        u_median = u.median(dim=['t', 'x', 'y', 'z'])
+        phase_shift = (u_median / (2 * np.pi)).round() * (2 * np.pi)
+        u -= phase_shift
+
+        # (frequency, t, x, y, z, component)
+        u = u.values.astype(np.complex128)
+
+        # construct k-space lowpass filter
+        k_filter = lowpass_filter_2d(
+            u.shape[2:4], resolution[:2], threshold, order
+        )
+        harmonic = 1
+        for f in range(u.shape[0]): # frequency
+            for c in range(u.shape[5]): # component
+                for t in range(u.shape[1]): # time
+
+                    # Gaussian phase smoothing
+                    for z in range(u.shape[4]): # z slice
+                        u_ = np.exp(1j * u[f,t,...,z,c])
+                        u_ = scipy.ndimage.gaussian_filter(
+                            u_, sigma=sigma, truncate=truncate
+                        )
+                        u_ /= np.abs(u_)
+                        u[f,t,...,z,c] = np.angle(u_)
+
+                    # gradient-based phase unwrapping
+                    u_     = np.exp( 1j * u[f,t,...,c])
+                    u_conj = np.exp(-1j * u[f,t,...,c])
+                    u_x, u_y, u_z = np.gradient(u_, *resolution)
+                    u[f,t,...,c] = (u_y * u_conj).imag
+
+                # Fourier transform across time
+                u[f,...,c] = np.fft.fft(u[f,...,c], axis=0)
+                u[f,...,c] = u[f,harmonic:harmonic+1,...,c]
+
+                for z in range(u.shape[4]): # z slice
+
+                    # Butterworth low-pass filtering
+                    u_ = np.fft.fftn(u[f,t,...,z,c])
+                    u_ = u_ * k_filter
+                    u[f,t,...,z,c] = np.fft.ifftn(u_)
+
+        self.arrays['wave'] = (self.arrays.wave.dims, u)
+
+        # average other variables across time
+        self.arrays = self.arrays.mean('t')
 
 
 def complex_normal(shape, loc, scale):
@@ -88,187 +351,6 @@ def add_complex_noise(array, noise_ratio, axis=0):
     noise_std = np.sqrt(noise_power).values
     noise = complex_normal(array.shape, loc=0, scale=noise_std)
     return array + noise
-
-
-def load_bioqic_phantom_data(
-    data_root, which='unwrapped_dejittered', preprocess=True, verbose=True
-):
-    '''
-    Args:
-        data_root: Path to directory with the files:
-            phantom_unwrapped_dejittered.mat (wave image)
-            phantom_elastogram.npy (elastogram)
-            phantom_regions.npy (segmentation mask)
-        which: One of the following values:
-            "raw_complex", "raw", "unwrapped", or "unwrapped_dejittered" (default)
-    Returns:
-        An xarray data set with the variables:
-            u: (6, 80, 100, 10, 3) wave image.
-            mu: (6, 80, 100, 10) elastogram.
-        And the dimensions:
-            (frequency, x, y, z, component)
-
-        The frequencies are 50-100 Hz by 10 Hz.
-        The spatial dimensions are in meters.
-    '''
-    which = which or 'unwrapped_dejittered'
-
-    data_root = pathlib.Path(data_root)
-    wave_file = data_root / f'phantom_{which}.mat'
-    elast_file = data_root / 'phantom_elastogram.npy'
-    region_file = data_root / 'phantom_regions.npy'
-
-    wave_var = {
-        'raw_complex': 'cube',
-        'raw': 'phase',
-        'unwrapped': 'phase_unwrapped',
-        'unwrapped_dejittered': 'phase_unwrap_noipd'
-    }[which]
-
-    # load true wave image and elastogram
-    data, rev_axes = load_mat_data(wave_file, verbose)
-    u = data[wave_var].T if rev_axes else data[wave_var]
-    a = data['magnitude'].T if rev_axes else data['magnitude']
-    try:
-        mu = load_np_data(elast_file, verbose)
-    except FileNotFoundError as e:
-        print(e, file=sys.stderr)
-        mu = u[0,0,0] * 0
-    try:
-        sr = load_np_data(region_file, verbose)
-    except FileNotFoundError as e:
-        print(e, file=sys.stderr)
-        sr = u[0,0,0] * 0
-
-    # spatial resolution in meters
-    dx = 1.5e-3
-
-    # convert to xarrays with metadata
-    a_dims = ['frequency', 'component', 't', 'z', 'x', 'y']
-    a_coords = {
-        'frequency': np.linspace(30, 100, a.shape[0]), # Hz
-        'component': ['z', 'x', 'y'],
-        't': np.arange(8),
-        'z': np.arange(a.shape[3]) * dx,
-        'x': np.arange(a.shape[4]) * dx,
-        'y': np.arange(a.shape[5]) * dx
-    }
-    a = xr.DataArray(a, dims=a_dims, coords=a_coords)
-
-    u_dims = ['frequency', 'component', 't', 'z', 'x', 'y']
-    u_coords = {
-        'frequency': np.linspace(30, 100, u.shape[0]), # Hz
-        'component': ['z', 'x', 'y'],
-        't': np.arange(8),
-        'z': np.arange(u.shape[3]) * dx,
-        'x': np.arange(u.shape[4]) * dx,
-        'y': np.arange(u.shape[5]) * dx
-    }
-    u = xr.DataArray(u, dims=u_dims, coords=u_coords)
-
-    mu_dims = ['frequency', 'x', 'y', 'z']
-    mu_coords = {
-        'frequency': np.linspace(30, 100, mu.shape[0]), # Hz
-        'x': np.arange(mu.shape[1]) * dx,
-        'y': np.arange(mu.shape[2]) * dx,
-        'z': np.arange(mu.shape[3]) * dx,
-    }
-    mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
-
-    sr_dims = ['x', 'y', 'z']
-    sr_coords = {
-        'x': np.arange(sr.shape[0]) * dx,
-        'y': np.arange(sr.shape[1]) * dx,
-        'z': np.arange(sr.shape[2]) * dx,
-    }
-    sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
-
-    # combine into a data set and transpose the dimensions
-    data = xr.Dataset(dict(a=a, u=u, mu=mu, spatial_region=sr))
-    data = data.transpose('frequency', 't', 'x', 'y', 'z', 'component')
-
-    if preprocess:
-        return preprocess_bioqic_phantom_data(data)
-    else:
-        return data
-
-
-def preprocess_bioqic_phantom_data(
-    data,
-    sigma=0.65,
-    truncate=3,
-    threshold=100,
-    order=1,
-    harmonic=1,
-    verbose=True
-):
-    '''
-    Args:
-        data: An xarray dataset with the following dims:
-            (frequency, t, x, y, z, component)
-        sigma: Standard deviation for Gaussian filter.
-        truncate: Truncate argument for Gaussian filter.
-        threshold: Cutoff frequency for low-pass filter.
-        order: Frequency roll-off rate for low-pass filter.
-        harmonic: Index of time harmonic to select.
-    Returns:
-        The processed xarray dataset.
-    '''
-    if verbose:
-        print('Preprocessing data')
-
-    data = data.copy()
-    resolution = data.field.spatial_resolution
-
-    # we estimate and remove the phase shift between images
-    #   and we extract the fundamental frequency across time
-    #   and we do some noise reduction
-
-    u_median = data.u.median(dim=['t', 'x', 'y', 'z'])
-    phase_shift = (u_median / (2 * np.pi)).round() * (2 * np.pi)
-    data['u'] = data.u - phase_shift
-
-    # (frequency, t, x, y, z, component)
-    u = data.u.values.astype(np.complex128)
-
-    # construct k-space lowpass filter
-    k_filter = lowpass_filter_2d(
-        u.shape[2:4], resolution[:2], threshold, order
-    )
-
-    for f in range(u.shape[0]): # frequency
-        for c in range(u.shape[5]): # component
-
-            for t in range(u.shape[1]): # time
-
-                # Gaussian phase smoothing
-                for z in range(u.shape[4]): # z slice
-                    u_ = np.exp(1j * u[f,t,...,z,c])
-                    u_ = scipy.ndimage.gaussian_filter(
-                        u_, sigma=sigma, truncate=truncate
-                    )
-                    u_ /= np.abs(u_)
-                    u[f,t,...,z,c] = np.angle(u_)
-
-                # gradient-based phase unwrapping
-                u_     = np.exp( 1j * u[f,t,...,c])
-                u_conj = np.exp(-1j * u[f,t,...,c])
-                u_x, u_y, u_z = np.gradient(u_, *resolution)
-                u[f,t,...,c] = (u_y * u_conj).imag
-
-            # Fourier transform across time
-            u[f,...,c] = np.fft.fft(u[f,...,c], axis=0)
-            u[f,...,c] = u[f,harmonic:harmonic+1,...,c]
-
-            for z in range(u.shape[4]): # z slice
-
-                # Butterworth low-pass filtering
-                u_ = np.fft.fftn(u[f,t,...,z,c])
-                u_ = u_ * k_filter
-                u[f,t,...,z,c] = np.fft.ifftn(u_)
-
-    data['u'] = (data.u.dims, u)
-    return data.mean('t') # average other variables across time
 
 
 def lowpass_filter_2d(shape, resolution, threshold=100, order=1):
@@ -298,70 +380,6 @@ def lowpass_filter_3d(shape, resolution, threshold=100, order=1):
     )
     k = 1 / (1 + (abs_k / threshold)**(2 * order))
     return np.fft.ifftshift(k)
-
-
-def load_bioqic_fem_box_data(data_root, verbose=True):
-    '''
-    Args:
-        data_root: Path to directory with the files:
-            four_target_phantom.mat (wave image)
-            fem_box_elastogram.npy (elastogram)
-            fem_box_regions.npy (segmentation mask)
-    Returns:
-        An xarray data set with the variables:
-            u: (6, 80, 100, 10, 3) wave image.
-            mu: (6, 80, 100, 10) elastogram.
-        And the dimensions:
-            (frequency, x, y, z, component)
-
-        The frequencies are 50-100 Hz by 10 Hz.
-        The spatial dimensions are in meters.
-    '''
-    data_root = pathlib.Path(data_root)
-    wave_file = data_root / 'four_target_phantom.mat'
-    elast_file = data_root / 'fem_box_elastogram.npy'
-    region_file = data_root / 'fem_box_regions.npy'
-
-    # load true wave image and elastogram
-    data, rev_axes = load_mat_data(wave_file, verbose)
-    u = data['u_ft'].T if rev_axes else data['u_ft']
-    mu = load_np_data(elast_file, verbose)
-    sr = load_np_data(region_file, verbose)
-
-    # spatial resolution in meters
-    dx = 1e-3
-
-    # convert to xarrays with metadata
-    u_dims = ['frequency', 'component', 'z', 'x', 'y']
-    u_coords = {
-        'frequency': np.linspace(50, 100, u.shape[0]), # Hz
-        'x': np.arange(u.shape[3]) * dx,
-        'y': np.arange(u.shape[4]) * dx,
-        'z': np.arange(u.shape[2]) * dx,
-        'component': ['y', 'x', 'z'],
-    }
-    u = xr.DataArray(u, dims=u_dims, coords=u_coords) * dx
-
-    mu_dims = ['frequency', 'z', 'x', 'y']
-    mu_coords = {
-        'frequency': np.linspace(50, 100, mu.shape[0]), # Hz
-        'x': np.arange(mu.shape[2]) * dx,
-        'y': np.arange(mu.shape[3]) * dx,
-        'z': np.arange(mu.shape[1]) * dx,
-    }
-    mu = xr.DataArray(mu, dims=mu_dims, coords=mu_coords) # Pa
-
-    sr_dims = ['z', 'x', 'y']
-    sr_coords = {
-        'z': np.arange(sr.shape[0]) * dx,
-        'x': np.arange(sr.shape[1]) * dx,
-        'y': np.arange(sr.shape[2]) * dx,
-    }
-    sr = xr.DataArray(sr, dims=sr_dims, coords=sr_coords)
-
-    # combine into a data set and transpose the dimensions
-    data = xr.Dataset(dict(a=0*u.real, u=u, mu=mu, spatial_region=sr))
-    return data.transpose('frequency', 'x', 'y', 'z', 'component')
 
 
 def select_data_subset(
