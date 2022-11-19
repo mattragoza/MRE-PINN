@@ -670,25 +670,21 @@ def get_color_kws(array, pct=99, scale=1.1):
     for visualizing the provided xarray.
     '''
     if array.name in {'sr', 'region', 'spatial_region'}:
-        if array.min() < 0:
             cmap = region_color_map(n_colors=6, has_background=True)
-            return dict(cmap=cmap, vmin=-1.5, vmax=4.5)
-        else:
-            cmap = region_color_map(n_colors=5, has_background=False)
-            return dict(cmap=cmap, vmin=-0.5, vmax=4.5)
-    elif array.name in {'a', 'A', 'anatomy', 'anatomic', 'mre_raw', 'dwi'} or array.name.startswith('t1') or array.name.startswith('t2'):
+            return dict(cmap=cmap, vmin=-0.5, vmax=5.5)
+    elif array.name in {'a', 'A', 'anat', 'anatomy', 'anatomic', 'mre_raw', 'dwi'} or array.name.startswith('t1') or array.name.startswith('t2'):
         cmap = grayscale_color_map()
         vmin = 0
         vmax = np.percentile(np.abs(array), pct) * scale
         return dict(cmap=cmap, vmin=vmin, vmax=vmax)
-    elif array.name in {'mu', 'Mu', 'elast', 'elastogram', 'baseline', 'mre', 'Mwave'}:
+    elif array.name in {'mre', 'mu', 'Mu', 'elast', 'elastogram', 'baseline', 'mre', 'Mwave'}:
         cmap = wave_color_map(reverse=True)
         vmax = np.percentile(np.abs(array), pct) * scale #2e4
     elif array.name == 'compare':
         cmap = grayscale_color_map(symmetric=True)
         vmax = np.percentile(np.abs(array), pct) * scale #2e4
     elif array.name == 'mask':
-        cmap = wave_color_map()
+        cmap = grayscale_color_map()
         return dict(cmap=cmap, vmin=0, vmax=1)
     else:
         cmap = wave_color_map()

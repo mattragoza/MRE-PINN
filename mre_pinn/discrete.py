@@ -210,21 +210,12 @@ def savgol_smoothing(u, **kwargs):
     ndim = u.field.n_spatial_dims
     deriv_order = (0,) * ndim
     kernels = savgol_filter_nd(ndim, **kwargs)
-    Ku = xr.zeros_like(u)
-    if 'frequency' in u and 'component' in u:
-        for frequency in range(u.shape[0]):
-            for component in range(u.shape[-1]):
-                Ku[frequency,...,component] = scipy.ndimage.convolve(
-                    u[frequency,...,component], kernels[deriv_order], mode='reflect'
-                )
-    else:
-        Ku[...] = scipy.ndimage.convolve(u, kernels[deriv_order], mode='reflect')
-    return Ku
+    return scipy.ndimage.convolve(u, kernels[deriv_order], mode='reflect')
 
 
 def savgol_jacobian(u, **kwargs):
     ndim = u.field.n_spatial_dims
-    x_res = u.field.spatial_resolution
+    resolution = u.field.spatial_resolution
     kernels = savgol_filter_nd(ndim, **kwargs)
     new_dim = u.component.rename(component='gradient')
     Ju = u.expand_dims({'gradient': new_dim}, axis=-1).copy()
@@ -234,27 +225,18 @@ def savgol_jacobian(u, **kwargs):
                 deriv_order = tuple(deriv_order)
                 Ju[frequency,...,component,i] = scipy.ndimage.convolve(
                     u[frequency,...,component], kernels[deriv_order], mode='reflect'
-                ) / x_res[i]
+                ) / resolution[i]
     return Ju
 
 
 def savgol_laplacian(u, **kwargs):
-    ndim = u.field.n_spatial_dims
-    x_res = u.field.spatial_resolution
-    kernels = savgol_filter_nd(ndim, **kwargs)
+    ndim =  u.field.n_spatial_dims
+    resolution = u.field.spatial_resolution
+    kernels = savgol_filter_nd(u.ndim, **kwargs)
     Lu = xr.zeros_like(u)
-    if 'frequency' in u and 'component' in u:
-        for frequency in range(u.shape[0]):
-            for component in range(u.shape[-1]):
-                for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
-                    deriv_order = tuple(deriv_order)
-                    Lu[frequency,...,component] += scipy.ndimage.convolve(
-                        u[frequency,...,component], kernels[deriv_order], mode='reflect'
-                    ) / x_res[i]**2
-    else:
-        for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
-            deriv_order = tuple(deriv_order)
-            Lu[...] += scipy.ndimage.convolve(
-                u, kernels[deriv_order], mode='reflect'
-            ) / x_res[i]**2
+    for i, deriv_order in enumerate(2 * np.eye(ndim, dtype=int)):
+        deriv_order = tuple(deriv_order)
+        Lu += scipy.ndimage.convolve(
+            u, kernels[deriv_order], mode='reflect'
+        ) / resolution[i]**2
     return Lu

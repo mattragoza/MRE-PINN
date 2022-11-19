@@ -63,18 +63,6 @@ class BIOQICSample(object):
         ).max()
         self.arrays = arrays
 
-    def eval_baseline(self, order=3, kernel_size=5, polar=True, verbose=True):
-        print_if(verbose, 'Evaluating baseline method')
-
-        # direct Helmholtz inversion via discrete laplacian
-        u = self.arrays.u
-        Ku = discrete.savgol_smoothing(u, order, kernel_size)
-        Lu = discrete.savgol_laplacian(u, order, kernel_size)
-        Mu = discrete.helmholtz_inversion(Ku, Lu, polar)
-        self.arrays['Kwave'] = Ku
-        self.arrays['Lwave'] = Lu
-        self.arrays['Mwave'] = Mu
-
     def view(self, *args, **kwargs):
         if not args:
             args = self.arrays.keys()

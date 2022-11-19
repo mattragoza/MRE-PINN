@@ -137,10 +137,10 @@ class ImagingCohort(object):
         for pid in progress(self.patient_ids):
             self.patients[pid].load_images()
 
-    def preprocess_images(self):
+    def preprocess(self):
         model = load_segment_model('cuda', verbose=self.verbose)
         for pid in progress(self.patient_ids):
-            self.patients[pid].preprocess_images(model=model)
+            self.patients[pid].preprocess(model=model)
 
     def to_dataset(self):
         return MREDataset.from_cohort(self)
@@ -243,7 +243,7 @@ class ImagingPatient(object):
         df['count'] = df['count'].astype(int)
         return df
 
-    def preprocess_images(
+    def preprocess(
         self,
         wave_vmax=1e3,
         same_grid=False,
@@ -574,12 +574,12 @@ def convert_to_xarray(image, verbose=True):
         dims = ['x', 'y']
     
     size = image.GetSize()
-    origin = image.GetOrigin()
-    spacing = image.GetSpacing()
+    origin = image.GetOrigin() # mm
+    spacing = image.GetSpacing() # mm
 
     coords = {}
     for i, dim in enumerate(dims):
-        coords[dim] = origin[i] + np.arange(size[i]) * spacing[i]
+        coords[dim] = (origin[i] + np.arange(size[i]) * spacing[i]) * 2e-3 # mm
 
     n_components = image.GetNumberOfComponentsPerPixel()
     if n_components > 1:
