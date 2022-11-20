@@ -111,10 +111,10 @@ class BIOQICFEMBox(BIOQICSample):
         matrix_mask = np.ones((80, 100), dtype=int)
         disk_mask = np.zeros((80, 100), dtype=int)
         disks = [
-            skimage.draw.disk(center=(39.4, 76.6), radius=10),
-            skimage.draw.disk(center=(39.5, 50.2), radius=5),
-            skimage.draw.disk(center=(39.5, 31.9), radius=2),
-            skimage.draw.disk(center=(39.5, 19.8), radius=1),
+            skimage.draw.disk(center=(39.8, 73.6), radius=10),
+            skimage.draw.disk(center=(39.8, 49.6), radius=5),
+            skimage.draw.disk(center=(39.8, 31.8), radius=3),
+            skimage.draw.disk(center=(39.8, 18.6), radius=2),
         ]
         disk_mask[disks[0]] = 1
         disk_mask[disks[1]] = 2

@@ -270,6 +270,8 @@ class MREExample(object):
             Mu.values = scipy.ndimage.gaussian_filter(Mu, sigma=0.65, truncate=3)
 
         # store results
+        self.arrays['base_diff'] = Mu - self.mre
+        self.arrays['base_diff'].name = 'baseline'
         self.arrays['base'] = Mu
         self.arrays['Lu'] = Lu
 
