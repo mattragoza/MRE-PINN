@@ -169,12 +169,13 @@ class TestEvaluator(PeriodicCallback):
                 kwargs = visual.get_color_kws(array.sel(variable=var))
                 viewer = visual.XArrayViewer(
                     array,
-                    #row='part',
+                    row='part' if array.field.is_complex else None,
                     col='variable',
                     y='y' if 'y' in array.coords else None,
-                    ax_width=2,
                     ax_height=2,
+                    ax_width=2,
                     interact=self.interact,
+                    polar=array.name in {'elastogram', 'baseline'},
                     **kwargs
                 )
                 self.viewers.append(viewer)

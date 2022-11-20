@@ -19,6 +19,7 @@ class MREPINNData(deepxde.data.Data):
         pde,
         loss_weights,
         pde_warmup_iters=10000,
+        pde_init_weight=1e-19,
         pde_step_iters=5000,
         pde_step_factor=10,
         n_points=4096,
@@ -29,9 +30,9 @@ class MREPINNData(deepxde.data.Data):
 
         self.loss_weights = loss_weights
         self.pde_warmup_iters = pde_warmup_iters
+        self.pde_init_weight = pde_init_weight
         self.pde_step_iters = pde_step_iters
         self.pde_step_factor = pde_step_factor
-        self.pde_init_weight = 1e-19
         self.n_points = n_points
 
         self.device = device
@@ -66,37 +67,32 @@ class MREPINNData(deepxde.data.Data):
         u = example.wave.field.values()
         mu = example.mre.field.values()
         mu_mask = example.mre_mask.values.reshape(-1)
-        if 'anat' in example:
-            y = example.anat.field.points()
-            a = example.anat.field.values()
-            a_mask = example.anat_mask.values.reshape(-1)
 
         # convert arrays to tensors on appropriate device
         x = torch.tensor(x, device=self.device, dtype=torch.float32)
         u = torch.tensor(u, device=self.device)
         mu = torch.tensor(mu, device=self.device)
         mu_mask = torch.tensor(mu_mask, device=self.device, dtype=torch.bool)
-        if 'anat' in example:
-            y = torch.tensor(y, device=self.device, dtype=torch.float32)
+
+        if 'anat' in example: # compute image patches
+            a = example.anat.values.transpose(2, 3, 0, 1) # xyzc → zcxy
             a = torch.tensor(a, device=self.device, dtype=torch.float32)
-            a_mask = torch.tensor(a_mask, device=self.device, dtype=torch.bool)
-            return x, u, mu, mu_mask, y, a, a_mask
+            a = torch.nn.functional.unfold(a, kernel_size=5, padding=2)
+            a = torch.permute(a, (2, 0, 1)) # z(ck)(xy) → (xy)z(ck)
+            a = a.reshape(-1, a.shape[-1])
+            return x, u, mu, mu_mask, a
         else:
-            return x, u, mu, mu_mask, None, None, None
+            return x, u, mu, mu_mask, x * 0
 
     def get_tensors(self, use_mask=True):
-        x, u, mu, mu_mask, y, a, a_mask = self.get_raw_tensors()
+        x, u, mu, mu_mask, a = self.get_raw_tensors()
 
         if use_mask: # apply mask and subsample points
             x, u, mu = x[mu_mask], u[mu_mask], mu[mu_mask]
             sample = torch.randperm(x.shape[0])[:self.n_points]
             x, u, mu = x[sample], u[sample], mu[sample]
-
-        # compute anatomic patches
-        if 'anat' in self.example:
-            a = TODO
-        else:
-            a = torch.zeros(1)
+            if 'anat' in self.example:
+                a = a[mu_mask][sample]
 
         input_ = (x, a)
         target = torch.cat([u, mu], dim=-1)
@@ -185,6 +181,7 @@ class MREPINNModel(deepxde.Model):
         mu_true = self.data.example.mre
         mu_base = self.data.example.base
         mu_mask = self.data.example.mre_mask
+        Lu_true = self.data.example.Lu
 
         # apply mask level
         mask_level = 1.0
@@ -197,7 +194,6 @@ class MREPINNModel(deepxde.Model):
         f_trac  = as_xarray(f_trac.reshape(u_shape), like=u_true)
         f_body  = as_xarray(f_body.reshape(u_shape), like=u_true)
         mu_pred = as_xarray(mu_pred.reshape(mu_shape), like=mu_true)
-        Lu_true = discrete.laplacian(u_pred)
 
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])

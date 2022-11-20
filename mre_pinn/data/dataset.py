@@ -256,6 +256,8 @@ class MREExample(object):
         # algebraic Helmholtz inversion
         Mu = discrete.helmholtz_inversion(Ku, Lu, rho, frequency, polar, eps=1e-5)
         Mu.name = 'baseline'
+        Ku.name = 'wave'
+        Lu.name = 'Laplacian'
 
         # post-processing
         if postprocess:
@@ -269,6 +271,7 @@ class MREExample(object):
 
         # store results
         self.arrays['base'] = Mu
+        self.arrays['Lu'] = Lu
 
     def view(self, *args, **kwargs):
         for var in (args or self.arrays):
