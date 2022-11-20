@@ -91,6 +91,14 @@ class FieldAccessor(object):
         return tuple(self.xarray.sizes[d] for d in value_dims)
 
     @property
+    def value_size(self):
+        return np.prod(self.xarray.field.value_shape, dtype=int)
+
+    @property
+    def is_complex(self):
+        return np.iscomplexobj(self.xarray)
+
+    @property
     def has_frequency(self):
         return 'frequency' in self.xarray.sizes
 
@@ -130,9 +138,8 @@ class FieldAccessor(object):
             n_components = self.xarray.field.n_components
             n_gradient = self.xarray.field.n_gradient
             T = self.xarray.field.dims + ['component', 'gradient']
-            return (
-                self.xarray.transpose(*T).values.reshape(-1, n_components, n_gradient)
-            )
+            values = self.xarray.transpose(*T).values
+            return values.reshape(-1, n_components, n_gradient)
 
         elif has_components: # vector field
             n_components = self.xarray.field.n_components

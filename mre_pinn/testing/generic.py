@@ -25,6 +25,7 @@ class TestEvaluator(PeriodicCallback):
 
         index_cols = [
             'iteration',
+            'dataset',
             'variable_type',
             'variable_source',
             'variable_name',
@@ -70,9 +71,9 @@ class TestEvaluator(PeriodicCallback):
         print(f'Time spent testing: {test_time:.4f} ({pct_test_time:.2f}%)')
 
     def test(self, save_model=True):    
-        arrays = self.model.test()
+        dataset, arrays = self.model.test()
         self.update_arrays(arrays)
-        metrics = self.compute_metrics(arrays)
+        metrics = self.compute_metrics(dataset, arrays)
         self.update_metrics(metrics)
         if self.plot:
             self.update_plots()
@@ -81,7 +82,7 @@ class TestEvaluator(PeriodicCallback):
         if save_model and self.save_prefix: # save model state
             self.model.save(self.weight_prefix + '_model')
 
-    def compute_metrics(self, arrays):
+    def compute_metrics(self, dataset, arrays):
         
         # current training iteration
         iter_ = self.iteration
@@ -100,19 +101,23 @@ class TestEvaluator(PeriodicCallback):
             for var_src, var_name in zip(sources, array['variable'].values):
                 a = array.sel(variable=var_name)
                 value = np.mean(np.abs(a)**2)
-                index = (iter_, var_type, var_src, var_name, 'all', 'all')
-                metric = (index, 'mean_squared_abs_value', value)
+                index = (iter_, dataset, var_type, var_src, var_name, 'all', 'all')
+                metric = (index, 'MSAV', value)
                 metrics.append(metric)
 
                 psd = discrete.power_spectrum(a)
                 for f_bin, value in zip(psd.spatial_frequency_bins.values, psd.values):
-                    index = (iter_, var_type, var_src, var_name, f_bin.right, 'all')
-                    metric = (index, 'power_density', value)
+                    index = (
+                        iter_, dataset, var_type, var_src, var_name, f_bin.right, 'all'
+                    )
+                    metric = (index, 'PSD', value)
                     metrics.append(metric)
 
                 #mav = np.abs(a.real).groupby(mask_var).median(...)
                 #for region, value in zip(mav.spatial_region.values, mav.values):
-                #    index = (iter_, var_type, var_src, var_name, 'all', region)
+                #    index = (
+                #    iter_, dataset, var_type, var_src, var_name, 'all', region
+                #    )
                 #    metric = (index, 'median_abs_value', value)
                 #    metrics.append(metric)
 
@@ -136,34 +141,17 @@ class TestEvaluator(PeriodicCallback):
         data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
-            self.freq_plot.update_data(data[data.variable_source == 'residual'])
-            #self.region_plot.update_data(data[data.variable_type == 'elastogram'])
         except AttributeError:
             self.norm_plot = visual.DataViewer(
                 data,
                 x='iteration',
-                y='mean_squared_abs_value',
+                y='MSAV',
                 col='variable_type',
-                hue='variable_source'
+                row='variable_source',
+                hue='dataset',
+                ax_height=1.5,
+                ax_width=1.25
             )
-            self.freq_plot = visual.DataViewer(
-                data[data.variable_source == 'residual'],
-                x='iteration',
-                y='power_density',
-                col='variable_type',
-                #row='variable_source',
-                hue='spatial_frequency_bin',
-                palette='Blues_r',
-            )
-            #self.region_plot = visual.DataViewer(
-            #    data[data.variable_type == 'elastogram'],
-            #    x='iteration',
-            #    y='median_abs_value',
-            #    col='variable_source',
-            #    #row='variable_type',
-            #    hue='spatial_region',
-            #    palette='Greens_r'
-            #)
         if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')

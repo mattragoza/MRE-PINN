@@ -1,2 +1,1 @@
-from .pinn import PINN, ParallelPINN
-from .pino import UNet
+from .pinn import PINN, MREPINN

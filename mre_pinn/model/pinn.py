@@ -1,112 +1,133 @@
 import numpy as np
 import torch
 
-from .generic import get_activ_fn, ParallelNet
 from ..utils import as_iterable, as_complex, concat, exists
+from .generic import get_activ_fn, ParallelNet
 
 
-class PINN(torch.nn.ModuleList):
-    '''
-    Physics-informed neural network.
+class MREPINN(torch.nn.Module):
 
-    Args:
-        n_inputs: Number of input units.
-        n_layers: Number of linear layers.
-        n_hidden: Number of hidden units.
-        n_output: Number of output units.
-        activ_fn: Activation function(s).
-        omega0: Input sine activation frequency.
-        dense: If True, use dense connections.
-        polar: If True, use polar model output.
-        conditional: If True, use anatomic image.
-    '''
+    def __init__(self, example, conditional, omega, **kwargs):
+        super().__init__()
+
+        metadata = example.metadata
+        x_center = torch.tensor(metadata['center'].wave, dtype=torch.float32)
+        x_extent = torch.tensor(metadata['extent'].wave, dtype=torch.float32)
+
+        stats = example.describe()
+        self.u_loc = torch.tensor(stats['mean'].wave)
+        self.u_scale = torch.tensor(stats['std'].wave)
+        self.mu_loc = torch.tensor(stats['mean'].mre)
+        self.mu_scale = torch.tensor(stats['std'].mre)
+        self.omega = torch.tensor(omega)
+
+        if conditional:
+            a_loc = torch.tensor(stats['mean'].anat, dtype=torch.float32)
+            a_scale = torch.tensor(stats['std'].anat, dtype=torch.float32)
+            self.input_loc = torch.cat([x_center, a_loc])
+            self.input_scale = torch.cat([x_extent, a_scale])
+        else:
+            self.input_loc = x_center
+            self.input_scale = x_extent
+
+        self.u_pinn = PINN(
+            n_input=len(self.input_loc),
+            n_output=len(self.u_loc),
+            complex_output=example.wave.field.is_complex,
+            **kwargs
+        )
+        self.mu_pinn = PINN(
+            n_input=len(self.input_loc),
+            n_output=len(self.mu_loc),
+            complex_output=example.mre.field.is_complex,
+            **kwargs
+        )
+        self.regularizer = None
+        self.conditional = conditional
+
+    def forward(self, inputs):
+        x, a = inputs
+        if self.conditional:
+            x = torch.cat([x, a], dim=-1)
+        x = (x - self.input_loc) / self.input_scale
+        x = x * self.omega
+        u_pred = self.u_pinn(x) * self.u_scale + self.u_loc
+        mu_pred = self.mu_pinn(x) * self.mu_scale + self.mu_loc
+        return u_pred, mu_pred
+
+
+class PINN(torch.nn.Module):
+
     def __init__(
         self,
-        n_inputs,
+        n_input,
+        n_output,
         n_layers,
         n_hidden,
-        n_output,
-        activ_fn,
-        omega0=None,
-        dense=False,
-        polar=False,
-        conditional=False,
-        dtype=torch.float32
+        dense=True,
+        polar_input=False,
+        complex_output=False,
+        polar_output=False
     ):
+        assert n_layers > 0
         super().__init__()
-        if conditional:
-            n_input = sum(as_iterable(n_inputs))
-        else:
-            n_input = as_iterable(n_inputs)[0]
-        self.n_input = n_input
-        self.input_scaler = InputScaler(dtype)
 
-        self.linears = []
-        for i in range(n_layers):
+        if polar_input:
+            n_input += 3
 
-            if i < n_layers - 1: # hidden layer
-                linear = torch.nn.Linear(n_input, n_hidden, dtype=dtype)
-            else: # output layer (complex-valued)
-                linear = torch.nn.Linear(n_input, n_output * 2, dtype=dtype)
-            self.linears.append(linear)
-            self.add_module(f'linear{i}', linear)
-
+        self.hiddens = []
+        for i in range(n_layers - 1):
+            hidden = torch.nn.Linear(n_input, n_hidden)
             if dense:
                 n_input += n_hidden
             else:
                 n_input = n_hidden
+            self.hiddens.append(hidden)
+            self.add_module(f'hidden{i}', hidden)
 
-        self.n_output = n_output
-        self.output_scaler = OutputScaler(dtype)
-
-        self.omega0 = torch.nn.Parameter(
-            torch.as_tensor(omega0, dtype=dtype)
-        )
-        self.activ_fn = get_activ_fn(activ_fn)
-        self.dense = dense
-        self.polar = polar
-        self.conditional = conditional
-
-    def forward(self, inputs):
-
-        if self.conditional:
-            input = torch.cat(inputs, dim=-1)
+        if complex:
+            self.output = torch.nn.Linear(n_input, 2 * n_output)
         else:
-            input = inputs[0]
-        input = self.input_scaler(input)
+            self.output = torch.nn.Linear(n_input, n_output)
 
-        # forward pass through hidden layers
-        for i, linear in enumerate(self.linears):
+        self.dense = dense
+        self.polar_input = polar_input
+        self.complex_output = complex_output
+        self.polar_output = polar_output
 
-            if i < len(self.linears) - 1: # hidden layer
+        self.init_weights()
 
-                if i == 0 and exists(self.omega0): # sine input layer
-                    output = torch.sin(self.omega0 * linear(input))
-                else:
-                    output = self.activ_fn(linear(input))
+    def forward(self, x):
+        '''
+        Args:
+            x: (n_points, n_input)
+        Returns:
+            u: (n_points, n_output)
+        '''
+        if self.polar_input: # polar coordinates
+            x, y, z = torch.split(x, 1, dim=-1)
+            r = torch.sqrt(x**2 + y**2)
+            sin, cos = x / (r + 1), y / (r + 1)
+            x = torch.cat([x, y, z, r, sin, cos], dim=-1)
 
-                if self.dense: # dense connections
-                    input = torch.cat([input, output], dim=1)
-                else:
-                    input = output
+        # hidden layers
+        for i, hidden in enumerate(self.hiddens):
+            y = torch.sin(hidden(x))
+            if self.dense:
+                x = torch.cat([x, y], dim=1)
+            else:
+                x = y
+        
+        # output layer
+        if self.complex_output:
+            return as_complex(self.output(x), polar=self.polar_output)
+        else:
+            return self.output(x)
 
-            else: # output layer
-                output = as_complex(linear(input), polar=self.polar)
-
-        output = self.output_scaler(output)
-        return output
-
-    def init_weights(self, inputs, output, c=6):
+    def init_weights(self, c=6):
         '''
         SIREN weight initialization.
         '''
-        if self.conditional:
-            input = concat(inputs, dim=-1)
-        else:
-            input = inputs[0]
-        self.input_scaler.init_weights(input)
-        self.output_scaler.init_weights(output)
-
         for i, module in enumerate(self.children()):
             if not hasattr(module, 'weight'):
                 continue
@@ -118,44 +139,4 @@ class PINN(torch.nn.ModuleList):
                 w_std = np.sqrt(c / n_input)
 
             with torch.no_grad():
-                if module.weight.dtype.is_complex:
-                    complex_uniform_(module.weight, 0, w_std)
-                else:
-                    module.weight.uniform_(-w_std, w_std)
-
-
-class ParallelPINN(ParallelNet):
-    net_type = PINN
-
-
-class InputScaler(torch.nn.Module):
-
-    def __init__(self, dtype=None):
-        super().__init__()
-        self.dtype = dtype
-
-    def init_weights(self, data):
-        data = torch.as_tensor(data, dtype=self.dtype)
-        self.loc = data.mean(dim=0, keepdim=True)
-        self.scale = data.std(dim=0, keepdim=True)
-
-        # avoid division by zero
-        self.scale[self.scale == 0] = 1
-
-    def forward(self, input):
-        return (input - self.loc) / self.scale
-
-
-class OutputScaler(torch.nn.Module):
-
-    def __init__(self, dtype=None):
-        super().__init__()
-        self.dtype = dtype
-
-    def init_weights(self, data):
-        data = torch.as_tensor(data, dtype=self.dtype)
-        self.loc = data.mean(dim=0, keepdim=True)
-        self.scale = data.std(dim=0, keepdim=True)
-
-    def forward(self, input):
-        return input * self.scale + self.loc
+                module.weight.uniform_(-w_std, w_std)

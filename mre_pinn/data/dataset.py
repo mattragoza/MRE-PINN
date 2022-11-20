@@ -140,28 +140,27 @@ class MREExample(object):
     def load_xarrays(cls, xarray_dir, example_id, anat=False, verbose=True):
         xarray_dir  = pathlib.Path(xarray_dir)
         example_dir = xarray_dir / str(example_id)
-        if anat:
-            anat = load_xarray_file(example_dir / 'anat.nc', verbose)
-            anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
-        else:
-            anat = anat_mask = None
         wave = load_xarray_file(example_dir / 'wave.nc', verbose)
         mre  = load_xarray_file(example_dir / 'mre.nc',  verbose)
         mre_mask  = load_xarray_file(example_dir / 'mre_mask.nc',  verbose)
-        return MREExample(
-            example_id, wave, mre, mre_mask, anat=anat, anat_mask=anat_mask
-        )
+        example = MREExample(example_id, wave, mre, mre_mask)
+        if anat:
+            anat = load_xarray_file(example_dir / 'anat.nc', verbose)
+            anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
+            example['anat'] = anat
+            example['anat_mask'] = anat_mask
+        return example
 
     def save_xarrays(self, xarray_dir, verbose=True):
         xarray_dir  = pathlib.Path(xarray_dir)
         example_dir = xarray_dir / str(self.example_id)
         example_dir.mkdir(parents=True, exist_ok=True)
-        if 'anat' in self:
-            save_xarray_file(example_dir / 'anat.nc', self.anat, verbose)
-            save_xarray_file(example_dir / 'anat_mask.nc', self.anat_mask, verbose)
         save_xarray_file(example_dir / 'wave.nc', self.wave, verbose)
         save_xarray_file(example_dir / 'mre.nc',  self.mre,  verbose)
         save_xarray_file(example_dir / 'mre_mask.nc',  self.mre_mask,  verbose)
+        if 'anat' in self:
+            save_xarray_file(example_dir / 'anat.nc', self.anat, verbose)
+            save_xarray_file(example_dir / 'anat_mask.nc', self.anat_mask, verbose)
 
     def __getitem__(self, key):
         return self.arrays[key]
@@ -175,7 +174,7 @@ class MREExample(object):
     def __getattr__(self, key):
         if key in self.arrays:
             return self.arrays[key]
-        raise AttributeError
+        raise AttributeError(f"'MREExample' object has no attribute '{key}'")
 
     def vars(self):
         return self.arrays.keys()

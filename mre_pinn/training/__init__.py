@@ -1,4 +1,3 @@
-from .pinn_training import PINNData, PINNModel
-from .pino_training import PINOData, PINOModel
+from .pinn_training import MREPINNData, MREPINNModel
 from . import losses
 from . import callbacks
