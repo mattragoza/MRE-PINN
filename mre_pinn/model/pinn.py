@@ -22,10 +22,10 @@ class MREPINN(torch.nn.Module):
         self.omega = torch.tensor(omega)
 
         if conditional:
-            a_loc = torch.tensor(stats['mean'].anat, dtype=torch.float32)
-            a_scale = torch.tensor(stats['std'].anat, dtype=torch.float32)
-            self.input_loc = torch.cat([x_center, a_loc])
-            self.input_scale = torch.cat([x_extent, a_scale])
+            a_loc = torch.tensor(stats['mean'].anat.astype(float), dtype=torch.float32)
+            a_scale = torch.tensor(stats['std'].anat.astype(float), dtype=torch.float32)
+            self.input_loc = torch.cat([x_center] + [a_loc] * 25)
+            self.input_scale = torch.cat([x_extent] + [a_scale] * 25)
         else:
             self.input_loc = x_center
             self.input_scale = x_extent
@@ -34,12 +34,14 @@ class MREPINN(torch.nn.Module):
             n_input=len(self.input_loc),
             n_output=len(self.u_loc),
             complex_output=example.wave.field.is_complex,
+            polar_output=False,
             **kwargs
         )
         self.mu_pinn = PINN(
             n_input=len(self.input_loc),
             n_output=len(self.mu_loc),
             complex_output=example.mre.field.is_complex,
+            polar_output=True,
             **kwargs
         )
         self.regularizer = None
@@ -85,8 +87,8 @@ class PINN(torch.nn.Module):
             self.hiddens.append(hidden)
             self.add_module(f'hidden{i}', hidden)
 
-        if complex:
-            self.output = torch.nn.Linear(n_input, 2 * n_output)
+        if complex_output:
+            self.output = torch.nn.Linear(n_input, n_output * 2)
         else:
             self.output = torch.nn.Linear(n_input, n_output)
 

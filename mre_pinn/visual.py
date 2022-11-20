@@ -36,6 +36,7 @@ class XArrayViewer(Viewer):
         verbose=False,
         **kwargs
     ):
+        self.polar = polar
         xarray = self.preprocess_array(xarray, polar=polar)
 
         self.establish_dimensions(xarray.dims, x, y, hue, row, col)
@@ -267,7 +268,7 @@ class XArrayViewer(Viewer):
         self.update_artists()
 
     def update_array(self, xarray):
-        xarray = self.preprocess_array(xarray)
+        xarray = self.preprocess_array(xarray, polar=self.polar)
         xarray = xarray.transpose(*(self.index_dims + self.value_dims))
         self.array = xarray.to_numpy()
         self.update_artists()
