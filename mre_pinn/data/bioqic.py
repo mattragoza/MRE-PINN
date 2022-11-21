@@ -17,6 +17,10 @@ class BIOQICSample(object):
     An MRE sample dataset from https://bioqic-apps.charite.de/.
     '''
     @property
+    def mat_name(self):
+        raise NotImplementedError
+    
+    @property
     def mat_base(self):
         return self.mat_name + '.mat'
 
@@ -320,6 +324,7 @@ class BIOQICPhantom(BIOQICSample):
                     u_ = u_ * k_filter
                     u[f,t,...,z,c] = np.fft.ifftn(u_)
 
+        u = u * 1e-5 # scale hack
         self.arrays['wave'] = (self.arrays.wave.dims, u)
 
         # average other variables across time

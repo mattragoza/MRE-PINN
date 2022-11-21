@@ -137,10 +137,10 @@ class ImagingCohort(object):
         for pid in progress(self.patient_ids):
             self.patients[pid].load_images()
 
-    def preprocess(self):
+    def preprocess(self, **kwargs):
         model = load_segment_model('cuda', verbose=self.verbose)
         for pid in progress(self.patient_ids):
-            self.patients[pid].preprocess(model=model)
+            self.patients[pid].preprocess(model=model, **kwargs)
 
     def to_dataset(self):
         return MREDataset.from_cohort(self)
@@ -245,7 +245,7 @@ class ImagingPatient(object):
 
     def preprocess(
         self,
-        wave_vmax=1e3,
+        wave_vmax=1e-1,
         same_grid=False,
         anat_size=(256, 256, 16),
         mre_size=(256, 256, 4),
