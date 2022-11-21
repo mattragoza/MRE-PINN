@@ -13,29 +13,31 @@ from mre_pinn.utils import main
 def train(
 
     # data settings
-    data_root='data/BIOQIC',
-    data_name='fem_box',
-    frequency=80,
-    xyz_slice='2D',
-    noise_ratio=0.0,
+    data_root,
+    example_id,
+    frequency,
 
     # pde settings
     pde_name='hetero',
+    pde_warmup_iters=10000,
+    pde_init_weight=1e-19,
+    pde_step_iters=5000,
+    pde_step_factor=10,
 
     # model settings
-    omega0=16,
-    n_layers=5,
+    omega=16,
+    n_layers=4,
     n_hidden=128,
-    activ_fn='t',
-    polar=False,
+    activ_fn='s',
     conditional=False,
 
     # training settings
     optimizer='adam',
     learning_rate=1e-4,
+    u_loss_wt=1,
+    mu_loss_wt=0,
     pde_loss_wt=1e-8,
-    data_loss_wt=1e0,
-    batch_size=128,
+    n_points=1024,
     n_iters=100000,
 
     # testing settings
@@ -44,50 +46,52 @@ def train(
     save_prefix=None
 ):
     # load the training data
-    data = mre_pinn.data.load_bioqic_dataset(
+    example = mre_pinn.data.MREExample.load_xarrays(
         data_root=data_root,
-        data_name=data_name,
-        frequency=frequency,
-        xyz_slice=xyz_slice,
-        noise_ratio=noise_ratio
+        example_id=example_id
+    )
+    example.eval_baseline(frequency=frequency, polar=True)
+
+    # define PDE that we want to solve
+    pde = mre_pinn.pde.WaveEquation.from_name(
+        pde_name, omega=frequency, detach=True
     )
 
-    # define model architecture
-    pinn = mre_pinn.model.ParallelPINN(
-        n_inputs=[data.field.n_spatial_dims + 1, data.field.n_spatial_dims],
-        n_outputs=[data.field.n_spatial_dims, 1],
-        omega0=omega0,
+    # define the model architecture
+    pinn = mre_pinn.model.MREPINN(
+        example,
+        omega=omega,
         n_layers=n_layers,
         n_hidden=n_hidden,
-        activ_fn=activ_fn,
-        dense=True,
-        polar=polar,
-        conditional=conditional,
-        dtype=torch.float32
+        polar_input=polar_input,
+        conditional=conditional
     )
     print(pinn)
 
-    # define PDE that we want to solve
-    pde = mre_pinn.pde.WaveEquation.from_name(pde_name, detach=True)
-
     # compile model and configure training settings
-    model = mre_pinn.training.PINNModel(data, pinn, pde, batch_size)
-    model.compile(
-        optimizer=optimizer,
-        lr=learning_rate,
-        loss_weights=[pde_loss_wt, data_loss_wt],
-        loss=mre_pinn.training.losses.standardized_msae_loss_fn(data.u.values)
+    model = mre_pinn.training.MREPINNModel(
+        example, pinn, pde,
+        loss_weights=[u_loss_wt, mu_loss_wt, pde_loss_wt],
+        pde_warmup_iters=pde_warmup_iters,
+        pde_step_iters=pde_step_iters,
+        pde_step_factor=pde_step_factor,
+        pde_init_weight=pde_init_weight,
+        n_points=n_points
     )
+    model.compile(optimizer='adam', lr=learning_rate, loss=msae_loss)
+    model.benchmark(100)
+
     test_eval = mre_pinn.testing.TestEvaluator(
         test_every=test_every,
         save_every=save_every,
         save_prefix=save_prefix
     )
-
     # train the model
     model.train(n_iters, display_every=10, callbacks=[test_eval])
 
     # final test evaluation
     print('Final test evaluation')
-    test_eval.test(data)
+    test_eval.test()
     print(test_eval.metrics)
+
+    print('Done')
