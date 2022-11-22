@@ -228,6 +228,17 @@ class MREExample(object):
         df['count'] - df['count'].astype(int)
         return df
 
+    def downsample(self, **factors):
+        arrays = {}
+        for var_name in self.vars():
+            array = self[var_name].coarsen(boundary='trim', **factors)
+            if var_name in {'mre_mask', 'anat_mask', 'spatial_region'}:
+                array = array.max()
+            else:
+                array = array.mean()
+            arrays[var_name] = array
+        return MREExample(self.example_id, **arrays)
+
     def eval_baseline(
         self, order=3, kernel_size=5, rho=1e3, frequency=60, polar=True,
         postprocess=False
