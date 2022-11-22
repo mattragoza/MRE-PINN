@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from ..training.callbacks import PeriodicCallback
-from .. import discrete, visual
+from .. import visual
 
 
 class TestEvaluator(PeriodicCallback):
@@ -105,7 +105,7 @@ class TestEvaluator(PeriodicCallback):
                 metric = (index, 'MSAV', value)
                 metrics.append(metric)
 
-                psd = discrete.power_spectrum(a)
+                psd = power_spectral_density(a)
                 for f_bin, value in zip(psd.spatial_frequency_bins.values, psd.values):
                     index = (
                         iter_, dataset, var_type, var_src, var_name, f_bin.right, 'all'
@@ -184,3 +184,22 @@ class TestEvaluator(PeriodicCallback):
             for array, viewer in zip(arrays, self.viewers):
                 array_name = array.name.lower().replace(' ', '_')
                 viewer.to_png(f'{self.viewer_prefix}_{array_name}_{curr_iter}.png')
+
+
+def power_spectral_density(u, n_bins=10):
+    '''
+    Compute power density wrt spatial frequency.
+    '''
+    # compute power spectrum
+    ps = np.abs(u.field.fft())**2
+    ps.name = u.name
+
+    # compute spatial frequency radii for binning
+    x = ps.field.spatial_points(reshape=False, standardize=True)
+    r = np.linalg.norm(x, ord=2, axis=-1)
+    ps = ps.assign_coords(spatial_frequency=(ps.field.spatial_dims, r * n_bins))
+
+    # take mean across spatial frequency bins
+    bins = np.linspace(0, n_bins, n_bins + 1, endpoint=True)
+    ps = ps.groupby_bins('spatial_frequency', bins=bins).mean(...)
+    return ps #.values

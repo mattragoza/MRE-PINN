@@ -6,135 +6,155 @@ import scipy.interpolate
 import ufl, dolfinx
 from mpi4py import MPI
 
-from .utils import as_xarray, minibatch
-from . import discrete
+from ..utils import print_if, as_xarray, minibatch
+from . import filters
 
 
-class MultiFEM(object):
-    '''
-    An ensemble of FEMs for multifrequency inversion.
-    '''
-    def __init__(self, data, *args, **kwargs):
-        self.data = data
-        self.fems = [
-            FEM(data.sel(frequency=[f]), *args, **kwargs) for f in data.frequency
-        ]
+def eval_fem_baseline(
+    example,
+    frequency,
+    component=['x', 'y'],
+    hetero=True,
+    u_elem_type='CG-2',
+    mu_elem_type='CG-1',
+    align_nodes=True,
+    savgol_filter=True,
+    order=3,
+    kernel_size=5,
+    despeckle=False,
+    threshold=3
+):
+    print('Evaluating FEM baseline')
+    u = example.wave
+    if not u.field.has_components:
+        o = xr.zeros_like(u)
+        new_dim = xr.DataArray(['x', 'y', 'z'], dims='component')
+        u = xr.concat([u, o, o], dim=new_dim)
 
-    def solve(self, *args, **kwargs):
-        frequencies = sorted(self.data.frequency)
-        for freq, fem in zip(frequencies, self.fems):
-            print(f'Solving FEM for frequency {freq}')
-            fem.solve(*args, **kwargs)
+    mu = []
+    for i, z in enumerate(u.z): # z slice
+        print(f'Solving slice {i+1}/{len(u.z)}')
+        if u.field.has_components:
+            u_z = u.sel(z=z, component=component)
+        else:
+            u_z = u.sel(z=z)
+        fem = MREFEM(
+            u_z,
+            u_elem_type=u_elem_type,
+            mu_elem_type=mu_elem_type,
+            align_nodes=align_nodes,
+            savgol_filter=savgol_filter,
+            order=order,
+            kernel_size=kernel_size,
+            despeckle=despeckle,
+            threshold=threshold,
+            verbose=False
+        )
+        fem.solve(frequency=frequency, hetero=hetero)
+        x_z = u_z.field.spatial_points()
+        mu_z = fem.predict(x_z)[1]
+        mu_z = mu_z.reshape(u_z.field.spatial_shape)
+        mu.append(mu_z)
 
-    @minibatch
-    def predict(self, x):
-
-        # get indices that sort points
-        # NOTE that argsort does not behave as expected here
-        #   we want to sort first by frequency, then by space
-        sort_indices = np.array(sorted(
-            np.arange(len(x)), key=lambda i: tuple(x[i])
-        ))
-        x = x[sort_indices]
-
-        # group by frequency and evaluate FEMs
-        frequencies = sorted(self.data.frequency.values)
-
-        results = None
-        for freq, fem in zip(frequencies, self.fems):
-            print(f'Predicting FEM for frequency {freq}')
-
-            # subset of points at current frequency
-            at_freq = np.isclose(x[:,0], freq)
-            x_freq = x[at_freq][:,1:]
-            if len(x_freq) == 0:
-                continue
-
-            # compute FEM results for current points
-            freq_results = fem.predict(x_freq)
-
-            if not results:
-                results = list(freq_results)
-                continue
-
-            for i, y in enumerate(freq_results):
-                results[i] = np.concatenate([results[i], y], axis=0)
-
-        # return results in the original order
-        unsort_indices = np.argsort(sort_indices)
-        results = tuple(y[unsort_indices] for y in results)
-        return results
+    mu = np.stack(mu, axis=-1)
+    if u.field.has_components:
+        mu = as_xarray(mu, like=u.sel(component='z'))
+    else:
+        mu = as_xarray(mu, like=u)
+    mu.name = 'baseline'
+    example['fem'] = mu
 
 
-class FEM(object):
+class MREFEM(object):
     '''
     Solve Navier-Cauchy equation for steady-state
     elastic wave vibration using finite elements.
     '''
     def __init__(
         self,
-        data,
-        u_elem_type='CG-1',
+        wave,
+        u_elem_type='CG-2',
         mu_elem_type='CG-1',
-        align_nodes=False,
-        savgol_filter=False,
+        align_nodes=True,
+        savgol_filter=True,
+        order=3,
+        kernel_size=5,
+        despeckle=False,
+        threshold=3,
+        verbose=True
     ):
-        self.data = data
-        x = data.field.spatial_points()
-
         # initialize the mesh
-        mesh = create_mesh_from_data(data, align_nodes)
+        print_if(verbose, 'Creating mesh from data')
+        mesh = create_mesh_from_data(wave, align_nodes)
 
         # determine the FEM element types
         u_elem_type = parse_elem_type(u_elem_type)
         mu_elem_type = parse_elem_type(mu_elem_type)
 
         # define the FEM basis function spaces
-        ndim = data.field.n_spatial_dims
+        print_if(verbose, 'Defining FEM basis function spaces')
+        ndim = wave.field.n_spatial_dims
         S = dolfinx.fem.FunctionSpace(mesh, mu_elem_type)
         V = dolfinx.fem.VectorFunctionSpace(mesh, u_elem_type, dim=ndim)
         T = dolfinx.fem.TensorFunctionSpace(mesh, u_elem_type, shape=(ndim, ndim))
 
+        print_if(verbose, 'Interpolating data into FEM basis')
         if savgol_filter: # Savitzky-Golay filtering
 
             # wave image-interpolating function
-            Ku = discrete.savgol_smoothing(data.u, order=2, kernel_size=3)
-            self.u_h = dolfinx.fem.Function(V)
+            Ku = wave.field.smooth(
+                order=order,
+                kernel_size=kernel_size,
+                use_z=False
+            )
+            self.u_h = dolfinx.fem.Function(V if wave.field.has_components else S)
             self.u_h.interpolate(create_func_from_data(Ku))
 
             # Jacobian-interpolating function
-            Ju = discrete.savgol_jacobian(data.u, order=2, kernel_size=3)
-            self.Ju_h = dolfinx.fem.Function(T)
+            Ju = wave.field.gradient(
+                savgol=True,
+                order=order,
+                kernel_size=kernel_size,
+                use_z=False
+            )
+            self.Ju_h = dolfinx.fem.Function(T if wave.field.has_components else V)
             self.Ju_h.interpolate(create_func_from_data(Ju))
 
             # Laplacian-interpolating function
-            Lu = discrete.savgol_laplacian(data.u, order=2, kernel_size=3)
-            self.Lu_h = dolfinx.fem.Function(V)
+            Lu = wave.field.laplacian(
+                savgol=True,
+                order=order,
+                kernel_size=kernel_size,
+                use_z=False
+            )
+            if despeckle:
+                Lu = 1 / filters.outlier_filter(1 / Lu, threshold=threshold)
+
+            self.Lu_h = dolfinx.fem.Function(V if wave.field.has_components else S)
             self.Lu_h.interpolate(create_func_from_data(Lu))
         else:
             # wave image-interpolating function
-            self.u_h = dolfinx.fem.Function(V)
-            self.u_h.interpolate(create_func_from_data(data.u))
+            self.u_h = dolfinx.fem.Function(V if wave.field.has_components else S)
+            self.u_h.interpolate(create_func_from_data(wave))
 
         # trial and test functions
         self.mu_h = ufl.TrialFunction(S)
-        self.v_h = ufl.TestFunction(V)
+        self.v_h = ufl.TestFunction(V if wave.field.has_components else S)
 
-    def solve(self, homogeneous=True):
-        from ufl import grad, inner, dx
+    def solve(self, rho=1000, frequency=None, hetero=False):
+        from ufl import grad, div, transpose, inner, dx
 
         # physical constants
-        rho = 1000
-        omega = 2 * np.pi * self.data.frequency.values.item()
+        omega = 2 * np.pi * frequency
 
         # construct bilinear form
         if hasattr(self, 'Lu_h'): # precomputed derivatives
             Auv = -self.mu_h * inner(self.Lu_h, self.v_h) * dx
-            if not homogeneous:
+            if hetero:
                 Auv -= inner(grad(self.mu_h), self.Ju_h * self.v_h) * dx
         else:
             Auv = self.mu_h * inner(grad(self.u_h), grad(self.v_h)) * dx
-            if not homogeneous:
+            if hetero:
                 Auv -= inner(grad(self.mu_h), grad(self.u_h) * self.v_h) * dx
 
         # construct inner product
@@ -150,9 +170,7 @@ class FEM(object):
     def predict(self, x):
         u_pred  = eval_dolfinx_func(self.u_h, x)
         mu_pred = eval_dolfinx_func(self.mu_pred_h, x)
-        lu_pred = 0 * u_pred
-        f_trac = f_body = 0 * u_pred
-        return u_pred, lu_pred, mu_pred, f_trac, f_body
+        return u_pred, mu_pred
 
 
 def parse_elem_type(s):
@@ -224,15 +242,19 @@ def create_uniform_mesh(x_min, x_max, shape):
 
     # discretize the domain on a mesh
     if ndim == 3:
-        raise NotImplementedError
+        mesh = dolfinx.mesh.create_box(
+            comm=MPI.COMM_WORLD,
+            points=[x_min, x_max],
+            n=shape,
+            cell_type=dolfinx.mesh.CellType.tetrahedron
+        )
 
     elif ndim == 2:
         mesh = dolfinx.mesh.create_rectangle(
             comm=MPI.COMM_WORLD,
             points=[x_min, x_max],
             n=shape,
-            cell_type=dolfinx.mesh.CellType.triangle,
-            diagonal=dolfinx.mesh.DiagonalType.left_right
+            cell_type=dolfinx.mesh.CellType.triangle
         )
     elif ndim == 1:
         mesh = dolfinx.mesh.create_interval(

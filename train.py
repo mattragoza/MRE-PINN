@@ -50,7 +50,8 @@ def train(
         data_root=data_root,
         example_id=example_id
     )
-    example.eval_baseline(frequency=frequency, polar=True)
+    mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
+    mre_pinn.baseline.eval_fem_baseline(example, frequency=frequency)
 
     # define PDE that we want to solve
     pde = mre_pinn.pde.WaveEquation.from_name(

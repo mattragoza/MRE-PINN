@@ -7,9 +7,6 @@ from sklearn.model_selection import KFold
 from ..utils import exists, print_if, as_xarray, is_iterable
 from ..visual import XArrayViewer
 
-import scipy.ndimage
-from .. import discrete
-
 
 class MREDataset(object):
     '''
@@ -82,10 +79,6 @@ class MREDataset(object):
             dfs.append(df)
         df = pd.concat(dfs).reset_index()
         return df.set_index(['example_id', 'variable', 'component'])
-
-    def eval_baseline(self, **kwargs):
-        for xid in self.example_ids:
-            self.examples[xid].eval_baseline(**kwargs)
 
     def shuffle(self, seed=None):
         np.random.seed(seed)
@@ -237,54 +230,7 @@ class MREExample(object):
             else:
                 array = array.mean()
             arrays[var_name] = array
-        return MREExample(self.example_id, **arrays)
-
-    def eval_baseline(
-        self, order=3, kernel_size=5, rho=1e3, frequency=60, polar=True,
-        postprocess=False
-    ):
-        # Savitsky-Golay smoothing and derivatives
-        u = self.wave
-        Ku = u.copy() # smoothed wave field
-        Lu = u.copy() # smoothed Laplacian
-        for z in range(u.shape[2]): # z slice
-            if not u.field.has_components:
-                Ku[...,z] = discrete.savgol_smoothing(
-                    u[...,z], order=order, kernel_size=kernel_size
-                )
-                Lu[...,z] = discrete.savgol_laplacian(
-                    u[...,z], order=order, kernel_size=kernel_size
-                )
-                continue
-            for c in range(u.shape[3]): # component
-                Ku[...,z,c] = discrete.savgol_smoothing(
-                    u[...,z,c], order=order, kernel_size=kernel_size
-                )
-                Lu[...,z,c] = discrete.savgol_laplacian(
-                    u[...,z,c], order=order, kernel_size=kernel_size
-                )
-
-        # algebraic Helmholtz inversion
-        Mu = discrete.helmholtz_inversion(Ku, Lu, rho, frequency, polar, eps=1e-5)
-        Mu.name = 'baseline'
-        Ku.name = 'wave'
-        Lu.name = 'Laplacian'
-
-        # post-processing
-        if postprocess:
-            Mu.values[Mu.values < 0] = 0
-            k = np.array([1, 2, 3, 2, 1])
-            k = np.einsum('i,j,k->ijk', k, k, k)
-            Mu_median = scipy.ndimage.median_filter(Mu, footprint=k > 2)
-            Mu_outliers = np.abs(Mu - Mu_median) > 1000
-            Mu.values = np.where(Mu_outliers, Mu_median, Mu)
-            Mu.values = scipy.ndimage.gaussian_filter(Mu, sigma=0.65, truncate=3)
-
-        # store results
-        self.arrays['base_diff'] = Mu - self.mre
-        self.arrays['base_diff'].name = 'baseline'
-        self.arrays['base'] = Mu
-        self.arrays['Lu'] = Lu
+        return MREExample(self.example_id, **arrays)     
 
     def view(self, *args, **kwargs):
         for var in (args or self.arrays):

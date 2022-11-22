@@ -9,7 +9,6 @@ import skimage.draw
 from .dataset import MREDataset
 from ..utils import print_if, as_xarray
 from ..visual import XArrayViewer
-from .. import discrete
 
 
 class BIOQICSample(object):

@@ -1,7 +1,9 @@
+from itertools import product
 import numpy as np
 import xarray as xr
-import torch
-import deepxde
+import scipy.ndimage
+
+from .baseline import filters
 
 
 def nd_coords(coords, reshape=True, standardize=False):
@@ -42,25 +44,37 @@ class FieldAccessor(object):
         self.xarray = xarray
 
     @property
-    def dims(self):
-        return [d for d in self.xarray.dims if d not in {'component', 'gradient'}]
-
-    @property
-    def n_dims(self):
-        return len(self.xarray.field.dims)
-
-    @property
     def spatial_dims(self):
         return [d for d in 'xyz' if d in self.xarray.sizes]
 
     @property
     def spatial_axes(self):
-        return [i for i, d in enumerate(self.xarray.dims) if d in 'xyz']
+        return [i for i, d in enumerate(self.xarray.dims) if d in set('xyz')]
 
     @property
     def n_spatial_dims(self):
         return len(self.xarray.field.spatial_dims)
 
+    @property
+    def non_spatial_dims(self):
+        return [d for d in self.xarray.sizes if d not in set('xyz')]
+
+    @property
+    def non_spatial_axes(self):
+        return [i for i, d in enumerate(self.xarray.dims) if d not in set('xyz')]
+
+    @property
+    def non_planar_axes(self):
+        return [i for i, d in enumerate(self.xarray.dims) if d not in set('xy')]
+
+    @property
+    def non_xy_axes(self):
+        return [i for i, d in enumerate(self.xarray.dims) if d not in set('xy')]
+
+    @property
+    def planar_dims(self):
+        return [d for d in 'xy' if d in self.xarray.sizes]
+    
     @property
     def origin(self):
         return [self.xarray[d].min() for d in self.spatial_dims]
@@ -78,6 +92,13 @@ class FieldAccessor(object):
         ])
 
     @property
+    def planar_resolution(self):
+        planar_dims = self.xarray.field.planar_dims
+        return np.array([
+            self.xarray[d].diff(d).mean() for d in planar_dims
+        ])
+
+    @property
     def value_dims(self):
         return [d for d in ['component', 'gradient'] if d in self.xarray.sizes]
 
@@ -88,7 +109,9 @@ class FieldAccessor(object):
     @property
     def value_shape(self):
         value_dims = self.xarray.field.value_dims
-        return tuple(self.xarray.sizes[d] for d in value_dims)
+        if value_dims:
+            return tuple(self.xarray.sizes[d] for d in value_dims)
+        return (1,)
 
     @property
     def value_size(self):
@@ -131,19 +154,20 @@ class FieldAccessor(object):
         return self.xarray.field.points(dims, *args, **kwargs)
 
     def values(self):
-        has_components = self.xarray.field.has_components
-        has_gradient = self.xarray.field.has_gradient
+        T = self.xarray.field.spatial_dims + self.xarray.field.value_dims
+        values = self.xarray.transpose(*T).values
+        return values.reshape(-1, *self.xarray.field.value_shape)
 
         if has_components and has_gradient: # tensor field
             n_components = self.xarray.field.n_components
             n_gradient = self.xarray.field.n_gradient
-            T = self.xarray.field.dims + ['component', 'gradient']
+            T = self.xarray.field.spatial_dims + ['component', 'gradient']
             values = self.xarray.transpose(*T).values
             return values.reshape(-1, n_components, n_gradient)
 
         elif has_components: # vector field
             n_components = self.xarray.field.n_components
-            T = self.xarray.field.dims + ['component']
+            T = self.xarray.field.spatial_dims + ['component']
             return self.xarray.transpose(*T).values.reshape(-1, n_components)
 
         elif has_gradient: # covector field
@@ -154,38 +178,73 @@ class FieldAccessor(object):
         else: # scalar field
             return self.xarray.values.reshape(-1, 1)
 
-
-class VectorFieldBC(deepxde.icbc.PointSetBC):
-
-    def __init__(
-        self, points, values, component=0, batch_size=None, shuffle=True
-    ):
-        self.points = np.asarray(points)
-        self.values = torch.as_tensor(values)
-        self.component = component # which component of model output
-        self.set_batch_size(batch_size, shuffle)
-
-    def __len__(self):
-        return self.points.shape[0]
-
-    def set_batch_size(self, batch_size, shuffle=True):
-        self.batch_size = batch_size
-        if batch_size is not None: # batch iterator and state
-            self.batch_sampler = deepxde.data.BatchSampler(len(self), shuffle=shuffle)
-            self.batch_indices = None
-
-    def collocation_points(self, X):
-        if self.batch_size is not None:
-            self.batch_indices = self.batch_sampler.get_next(self.batch_size)
-            return self.points[self.batch_indices]
-        return self.points
-
-    def error(self, X, inputs, outputs, beg, end, aux_var=None):
-        if self.batch_size is not None:
-            values = self.values[self.batch_indices]
+    def gradient(self, dim='gradient', use_z=False, **kwargs):
+        if use_z:
+            spatial_dims = self.xarray.field.spatial_dims
         else:
-            values = self.values
-        return (
-            outputs[beg:end, self.component:self.component + self.values.shape[-1]] -
-            values
-        )
+            spatial_dims = self.xarray.field.planar_dims
+        gradient = []
+        for d in spatial_dims:
+            g = self.xarray.field.differentiate(coord=d, use_z=use_z, **kwargs)
+            gradient.append(g)
+        new_dim = xr.DataArray(spatial_dims, dims=dim)
+        return xr.concat(gradient, dim=new_dim)
+
+    def divergence(self, dim='component', use_z=False, **kwargs):
+        if use_z:
+            spatial_dims = self.xarray.field.spatial_dims
+        else:
+            spatial_dims = self.xarray.field.planar_dims
+        divergence = 0
+        for d in self.xarray[dim].values:
+            component = self.xarray.sel(**{dim: d})
+            divergence += component.field.differentiate(coord=d, use_z=use_z, **kwargs)
+        return divergence
+
+    def laplacian(self, savgol=True, **kwargs):
+        if savgol:
+            gradient = self.xarray.field.gradient(deriv=2, **kwargs)
+            return gradient.sum('gradient')
+        else:
+            gradient = self.xarray.field.gradient(**kwargs)
+            return gradient.field.divergence(dim='gradient', **kwargs)
+
+    def smooth(self, **kwargs):
+        coord = self.xarray.field.spatial_dims[0]
+        return self.xarray.field.savgol_filter(coord=coord, deriv=0, **kwargs)
+
+    def differentiate(self, coord, savgol=True, deriv=1, **kwargs):
+        if savgol:
+            return self.xarray.field.savgol_filter(coord, deriv, **kwargs)
+        else:
+            return self.xarray.differentiate(coord=coord)
+
+    def savgol_filter(self, coord, deriv, use_z=False, **kwargs):
+        if use_z:
+            spatial_dims = self.xarray.field.spatial_dims
+            non_spatial_axes = self.xarray.field.non_spatial_axes
+            spatial_resolution = self.xarray.field.spatial_resolution
+        else:
+            spatial_dims = self.xarray.field.planar_dims
+            non_spatial_axes = self.xarray.field.non_planar_axes
+            spatial_resolution = self.xarray.field.planar_resolution
+        n = len(spatial_dims)
+        axis = spatial_dims.index(coord)
+        derivs = tuple((0, deriv)[i == axis] for i in range(n))
+        kernel = filters.savgol_kernel_nd(n, **kwargs)[derivs]
+        kernel = np.expand_dims(kernel, sorted(non_spatial_axes))
+        #print(self.xarray.shape, kernel.shape, derivs)
+        result = self.xarray.copy()
+        result[...] = scipy.ndimage.convolve(self.xarray, kernel, mode='reflect')
+        return result / spatial_resolution[axis]**deriv
+
+    def fft(self, shift=True):
+        '''
+        Convert to spatial frequency domain.
+        '''
+        axes = self.xarray.field.spatial_axes
+        result = xr.zeros_like(self.xarray)
+        result.values = np.fft.fftn(self.xarray, norm='ortho', axes=axes)
+        if shift:
+            result.values = np.fft.fftshift(result.values, axes=axes)
+        return result

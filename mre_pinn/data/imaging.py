@@ -11,7 +11,6 @@ from .dataset import MREDataset
 from .segment import UNet3D
 from ..utils import print_if, progress, braced_glob, as_path_list
 from ..visual import XArrayViewer
-from .. import discrete
 
 
 SEQUENCES = [

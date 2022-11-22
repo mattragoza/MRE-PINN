@@ -7,10 +7,9 @@ from . import (
 	model,
 	training,
 	testing,
+	baseline,
 	fields,
 	pde,
-	discrete,
-	fem,
 	visual,
 	utils
 )

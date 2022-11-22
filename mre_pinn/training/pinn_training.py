@@ -7,7 +7,6 @@ import deepxde
 
 from ..utils import minibatch, as_xarray
 from ..pde import laplacian
-from .. import discrete
 from .losses import msae_loss
 
 
