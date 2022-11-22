@@ -11,7 +11,6 @@ import seaborn as sns
 import ipywidgets
 
 from .utils import exists, print_if, as_iterable
-from . import discrete
 
 DPI = 50
 
@@ -58,7 +57,7 @@ class XArrayViewer(Viewer):
         '''
         if 'domain' not in xarray.dims:
             xarray = xr.concat(
-                [xarray, discrete.fft(xarray)],
+                [xarray, xarray.field.fft()],
                 dim=xr.DataArray(['space', 'frequency'], dims=['domain'])
             )
 
