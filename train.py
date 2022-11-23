@@ -15,7 +15,7 @@ def train(
 
     # data settings
     xarray_dir='data/BIOQIC/fem_box',
-    example_id=60,
+    example_id='60',
     frequency='auto',
 
     # pde settings
@@ -53,7 +53,9 @@ def train(
         example_id=example_id
     )
     if frequency == 'auto': # infer from data
-        frequency = example.wave.frequency.item()
+        frequency = float(example.wave.frequency.item())
+    else:
+        frequency = float(frequency)
 
     mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
     mre_pinn.baseline.eval_fem_baseline(example, frequency=frequency)
