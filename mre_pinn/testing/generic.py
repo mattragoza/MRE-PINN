@@ -1,6 +1,7 @@
 import os, time
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 from ..training.callbacks import PeriodicCallback
 from .. import visual
@@ -143,6 +144,8 @@ class TestEvaluator(PeriodicCallback):
         data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
+            self.freq_plot.update_data(data)
+            self.region_plot.update_data(data)
         except AttributeError:
             self.norm_plot = visual.DataViewer(
                 data,
@@ -154,10 +157,30 @@ class TestEvaluator(PeriodicCallback):
                 ax_height=1.5,
                 ax_width=1.25
             )
+            self.freq_plot = visual.DataViewer(
+                data,
+                x='iteration',
+                y='SPD',
+                col='variable_type',
+                row='variable_source',
+                hue='spatial_frequency_bin',
+                ax_height=1.5,
+                ax_width=1.25
+            )
+            self.region_plot = visual.DataViewer(
+                data,
+                x='iteration',
+                y='MAV',
+                col='variable_type',
+                row='variable_source',
+                hue='spatial_region',
+                ax_height=1.5,
+                ax_width=1.25
+            )
         if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
-            #self.region_plot.to_png(self.save_prefix + '_train_regions.png')
+            self.region_plot.to_png(self.save_prefix + '_train_regions.png')
 
     def update_viewers(self, save=True):
         arrays = self.arrays

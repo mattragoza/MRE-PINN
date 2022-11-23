@@ -7,36 +7,38 @@ import deepxde
 
 import mre_pinn
 from mre_pinn.utils import main
+from mre_pinn.training.losses import msae_loss
 
 
 @main
 def train(
 
     # data settings
-    data_root,
-    example_id,
-    frequency,
+    xarray_dir='data/BIOQIC/fem_box',
+    example_id=60,
+    frequency='auto',
 
     # pde settings
     pde_name='hetero',
-    pde_warmup_iters=10000,
-    pde_init_weight=1e-19,
-    pde_step_iters=5000,
-    pde_step_factor=10,
 
     # model settings
-    omega=16,
-    n_layers=4,
+    omega=20,
+    n_layers=5,
     n_hidden=128,
     activ_fn='s',
     conditional=False,
+    polar_input=False,
 
     # training settings
     optimizer='adam',
     learning_rate=1e-4,
-    u_loss_wt=1,
-    mu_loss_wt=0,
-    pde_loss_wt=1e-8,
+    u_loss_weight=1,
+    mu_loss_weight=0,
+    pde_loss_weight=1e-16,
+    pde_warmup_iters=10000,
+    pde_init_weight=1e-18,
+    pde_step_iters=5000,
+    pde_step_factor=10,
     n_points=1024,
     n_iters=100000,
 
@@ -47,9 +49,12 @@ def train(
 ):
     # load the training data
     example = mre_pinn.data.MREExample.load_xarrays(
-        data_root=data_root,
+        xarray_dir=xarray_dir,
         example_id=example_id
     )
+    if frequency == 'auto': # infer from data
+        frequency = example.wave.frequency.item()
+
     mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
     mre_pinn.baseline.eval_fem_baseline(example, frequency=frequency)
 
@@ -72,7 +77,7 @@ def train(
     # compile model and configure training settings
     model = mre_pinn.training.MREPINNModel(
         example, pinn, pde,
-        loss_weights=[u_loss_wt, mu_loss_wt, pde_loss_wt],
+        loss_weights=[u_loss_weight, mu_loss_weight, pde_loss_weight],
         pde_warmup_iters=pde_warmup_iters,
         pde_step_iters=pde_step_iters,
         pde_step_factor=pde_step_factor,
