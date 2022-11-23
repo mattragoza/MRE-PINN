@@ -178,7 +178,8 @@ class MREPINNModel(deepxde.Model):
         # get ground truth xarrays
         u_true = self.data.example.wave
         mu_true = self.data.example.mre
-        mu_base = self.data.example.base
+        mu_direct = self.data.example.direct
+        mu_fem = self.data.example.fem
         mu_mask = self.data.example.mre_mask
         Lu_true = self.data.example.Lu
 
@@ -230,13 +231,22 @@ class MREPINNModel(deepxde.Model):
         ],dim=mu_dim)
         mu.name = 'elastogram'
 
-        Mu_vars = ['Mu_base', 'Mu_diff', 'mu_true']
-        Mu_dim = xr.DataArray(Mu_vars, dims=['variable'])
-        Mu = xr.concat([
-            mu_mask * mu_base,
-            mu_mask * (mu_true - mu_base),
+        direct_vars = ['direct_pred', 'direct_diff', 'mu_true']
+        direct_dim = xr.DataArray(direct_vars, dims=['variable'])
+        direct = xr.concat([
+            mu_mask * mu_direct,
+            mu_mask * (mu_true - mu_direct),
             mu_mask * mu_true
-        ], dim=Mu_dim)
-        Mu.name = 'baseline'
+        ], dim=direct_dim)
+        direct.name = 'direct'
 
-        return 'train', (u, lu, pde, mu, Mu)
+        fem_vars = ['fem_pred', 'fem_diff', 'mu_true']
+        fem_dim = xr.DataArray(fem_vars, dims=['variable'])
+        fem = xr.concat([
+            mu_mask * mu_fem,
+            mu_mask * (mu_true - mu_fem),
+            mu_mask * mu_true
+        ], dim=fem_dim)
+        fem.name = 'FEM'
+
+        return 'train', (u, lu, pde, mu, direct, fem)

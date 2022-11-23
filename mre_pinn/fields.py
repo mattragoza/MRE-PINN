@@ -44,6 +44,10 @@ class FieldAccessor(object):
         self.xarray = xarray
 
     @property
+    def dims(self):
+        return [d for d in self.xarray.sizes if d not in {'component', 'gradient'}]
+
+    @property
     def spatial_dims(self):
         return [d for d in 'xyz' if d in self.xarray.sizes]
 

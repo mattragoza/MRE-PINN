@@ -96,6 +96,8 @@ class TestEvaluator(PeriodicCallback):
                 mask_var = 'spatial_region'
             else:
                 mask_var = 'mask'
+            
+            array = array.assign_coords(region=array[mask_var])
 
             # model, residual, or reference
             for var_src, var_name in zip(sources, array['variable'].values):
@@ -113,13 +115,13 @@ class TestEvaluator(PeriodicCallback):
                     metric = (index, 'PSD', value)
                     metrics.append(metric)
 
-                #mav = np.abs(a.real).groupby(mask_var).median(...)
-                #for region, value in zip(mav.spatial_region.values, mav.values):
-                #    index = (
-                #    iter_, dataset, var_type, var_src, var_name, 'all', region
-                #    )
-                #    metric = (index, 'median_abs_value', value)
-                #    metrics.append(metric)
+                mav = np.abs(a).groupby('region').median(...)
+                for region, value in zip(mav.region.values, mav.values):
+                    index = (
+                        iter_, dataset, var_type, var_src, var_name, 'all', region
+                    )
+                    metric = (index, 'MAV', value)
+                    metrics.append(metric)
 
         return metrics
 
@@ -175,7 +177,7 @@ class TestEvaluator(PeriodicCallback):
                     ax_height=2,
                     ax_width=2,
                     interact=self.interact,
-                    polar=array.name in {'elastogram', 'baseline'},
+                    polar=array.name in {'elastogram', 'baseline', 'FEM', 'direct'},
                     **kwargs
                 )
                 self.viewers.append(viewer)

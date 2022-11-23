@@ -21,7 +21,7 @@ def eval_fem_baseline(
     savgol_filter=True,
     order=3,
     kernel_size=5,
-    despeckle=False,
+    despeckle=True,
     threshold=3
 ):
     print('Evaluating FEM baseline')
@@ -58,7 +58,7 @@ def eval_fem_baseline(
 
     mu = np.stack(mu, axis=-1)
     if u.field.has_components:
-        mu = as_xarray(mu, like=u.sel(component='z'))
+        mu = as_xarray(mu, like=u.mean('component'))
     else:
         mu = as_xarray(mu, like=u)
     mu.name = 'baseline'

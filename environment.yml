@@ -22,4 +22,5 @@ dependencies:
   - ipykernel
   - ipywidgets
   - tqdm
+  - parse
 

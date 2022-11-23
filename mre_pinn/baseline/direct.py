@@ -25,6 +25,9 @@ def eval_direct_baseline(
     if despeckle:
         Lu = 1 / filters.outlier_filter(1 / Lu, threshold=threshold)
 
+    Lu.name = 'Laplacian'
+    example['Lu'] = Lu
+
     Mu = helmholtz_inversion(u, Lu, frequency=frequency, polar=polar)
     Mu.name = 'baseline'
     example['direct'] = Mu
