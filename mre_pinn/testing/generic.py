@@ -160,7 +160,7 @@ class TestEvaluator(PeriodicCallback):
             self.freq_plot = visual.DataViewer(
                 data,
                 x='iteration',
-                y='SPD',
+                y='PSD',
                 col='variable_type',
                 row='variable_source',
                 hue='spatial_frequency_bin',
