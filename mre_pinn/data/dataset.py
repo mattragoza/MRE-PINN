@@ -56,7 +56,7 @@ class MREDataset(object):
     def __getitem__(self, idx):
         if is_iterable(idx, string_ok=False) or isinstance(idx, slice):
             example_ids = self.example_ids[idx]
-            examples = {xid:self.examples[xid] for xid in example_ids}
+            examples = {xid: self.examples[xid] for xid in example_ids}
             return MREDataset(example_ids, examples)
         else:
             return self.examples[self.example_ids[idx]]
@@ -232,9 +232,16 @@ class MREExample(object):
             arrays[var_name] = array
         return MREExample(self.example_id, **arrays)     
 
-    def view(self, *args, **kwargs):
-        for var in (args or self.arrays):
-            XArrayViewer(self.arrays[var], **kwargs)
+    def view(self, *args, mask=False, **kwargs):
+        for var_name in (args or self.arrays):
+            array = self.arrays[var_name]
+            if mask:
+                if var_name == 'anat':
+                    m = self.arrays.get('anat_mask', 'spatial_region')
+                else:
+                    m = self.arrays.get('mre_mask', 'spatial_region')
+                array = as_xarray(array * (m > 0), like=array)
+            XArrayViewer(array, **kwargs)
 
 
 def save_xarray_file(nc_file, array, verbose=True):
