@@ -162,26 +162,6 @@ class FieldAccessor(object):
         values = self.xarray.transpose(*T).values
         return values.reshape(-1, *self.xarray.field.value_shape)
 
-        if has_components and has_gradient: # tensor field
-            n_components = self.xarray.field.n_components
-            n_gradient = self.xarray.field.n_gradient
-            T = self.xarray.field.spatial_dims + ['component', 'gradient']
-            values = self.xarray.transpose(*T).values
-            return values.reshape(-1, n_components, n_gradient)
-
-        elif has_components: # vector field
-            n_components = self.xarray.field.n_components
-            T = self.xarray.field.spatial_dims + ['component']
-            return self.xarray.transpose(*T).values.reshape(-1, n_components)
-
-        elif has_gradient: # covector field
-            n_gradient = self.xarray.field.n_gradient
-            T = self.xarray.field.dims + ['gradient']
-            return self.xarray.transpose(*T).values.reshape(-1, n_gradient)
-
-        else: # scalar field
-            return self.xarray.values.reshape(-1, 1)
-
     def gradient(self, dim='gradient', use_z=False, **kwargs):
         if use_z:
             spatial_dims = self.xarray.field.spatial_dims
@@ -207,11 +187,11 @@ class FieldAccessor(object):
 
     def laplacian(self, savgol=True, **kwargs):
         if savgol:
-            gradient = self.xarray.field.gradient(deriv=2, **kwargs)
+            gradient = self.xarray.field.gradient(deriv=2, savgol=True, **kwargs)
             return gradient.sum('gradient')
         else:
-            gradient = self.xarray.field.gradient(**kwargs)
-            return gradient.field.divergence(dim='gradient', **kwargs)
+            gradient = self.xarray.field.gradient(deriv=1, savgol=False, **kwargs)
+            return gradient.field.divergence(dim='gradient', savgol=False, **kwargs)
 
     def smooth(self, **kwargs):
         coord = self.xarray.field.spatial_dims[0]
@@ -219,7 +199,10 @@ class FieldAccessor(object):
 
     def differentiate(self, coord, savgol=True, deriv=1, **kwargs):
         if savgol:
-            return self.xarray.field.savgol_filter(coord, deriv, **kwargs)
+            return self.xarray.field.savgol_filter(coord=coord, deriv=deriv, **kwargs)
+        elif deriv > 1:
+            d = self.xarray.differentiate(coord=coord)
+            return d.field.differentiate(coord=coord, savgol=False, deriv=deriv - 1)
         else:
             return self.xarray.differentiate(coord=coord)
 

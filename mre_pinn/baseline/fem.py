@@ -19,8 +19,8 @@ def eval_fem_baseline(
     mu_elem_type='CG-1',
     align_nodes=True,
     savgol_filter=True,
-    order=3,
-    kernel_size=5,
+    order=2,
+    kernel_size=3,
     despeckle=True,
     threshold=3
 ):

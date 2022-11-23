@@ -9,9 +9,9 @@ def eval_direct_baseline(
     frequency,
     polar=True,
     savgol_filter=True,
-    order=3,
-    kernel_size=5,
-    despeckle='auto',
+    order=2,
+    kernel_size=3,
+    despeckle=True,
     threshold=3
 ):
     print('Evaluating direct baseline')
