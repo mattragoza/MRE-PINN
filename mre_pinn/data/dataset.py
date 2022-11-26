@@ -96,6 +96,8 @@ class MREExample(object):
     '''
     def __init__(self, example_id, wave, mre, mre_mask, **arrays):
         self.example_id = example_id
+        wave = wave.assign_coords(region=mre_mask)
+        mre = mre.assign_coords(region=mre_mask)
         self.arrays = {'wave': wave, 'mre': mre, 'mre_mask': mre_mask}
         self.arrays.update({k: v for k, v in arrays.items() if exists(v)})
 

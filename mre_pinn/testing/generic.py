@@ -93,13 +93,6 @@ class TestEvaluator(PeriodicCallback):
         for array in arrays: # wave field, laplacian, elastogram, baseline
             var_type = array.name
 
-            if 'spatial_region' in array.coords:
-                mask_var = 'spatial_region'
-            else:
-                mask_var = 'mask'
-            
-            array = array.assign_coords(region=array[mask_var])
-
             # model, residual, or reference
             for var_src, var_name in zip(sources, array['variable'].values):
                 a = array.sel(variable=var_name)
