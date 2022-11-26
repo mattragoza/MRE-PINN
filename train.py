@@ -58,7 +58,12 @@ def train(
         frequency = float(frequency)
 
     mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
-    mre_pinn.baseline.eval_fem_baseline(example, frequency=frequency)
+    mre_pinn.baseline.eval_fem_baseline(
+        example,
+        frequency=frequency,
+        hetero=(pde_name == 'hetero'),
+        hetero2=(pde_name == 'hetero2')
+    )
 
     # define PDE that we want to solve
     pde = mre_pinn.pde.WaveEquation.from_name(

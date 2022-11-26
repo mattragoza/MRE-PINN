@@ -15,6 +15,7 @@ def eval_fem_baseline(
     frequency,
     component=['x', 'y'],
     hetero=True,
+    hetero2=True,
     u_elem_type='CG-2',
     mu_elem_type='CG-1',
     align_nodes=True,
@@ -50,8 +51,13 @@ def eval_fem_baseline(
             threshold=threshold,
             verbose=False
         )
-        fem.solve(frequency=frequency, hetero=hetero)
-        x_z = u_z.field.spatial_points()
+        fem.solve(frequency=frequency, hetero=hetero, hetero2=hetero2)
+        x_z = u_z.field.spatial_points(reshape=False)
+        x_z[ 0,:,0] = x_z[ 1,:,0]
+        x_z[-1,:,0] = x_z[-2,:,0]
+        x_z[:, 0,1] = x_z[:, 1,1]
+        x_z[:,-1,1] = x_z[:,-2,1]
+        x_z = x_z.reshape(-1, x_z.shape[-1])
         mu_z = fem.predict(x_z)[1]
         mu_z = mu_z.reshape(u_z.field.spatial_shape)
         mu.append(mu_z)
@@ -141,7 +147,7 @@ class MREFEM(object):
         self.mu_h = ufl.TrialFunction(S)
         self.v_h = ufl.TestFunction(V if wave.field.has_components else S)
 
-    def solve(self, rho=1000, frequency=None, hetero=False):
+    def solve(self, rho=1000, frequency=None, hetero=False, hetero2=False):
         from ufl import grad, div, transpose, inner, dx
 
         # physical constants
@@ -150,11 +156,21 @@ class MREFEM(object):
         # construct bilinear form
         if hasattr(self, 'Lu_h'): # precomputed derivatives
             Auv = -self.mu_h * inner(self.Lu_h, self.v_h) * dx
-            if hetero:
+            if hetero2:
+                Auv -= inner(
+                    grad(self.mu_h),
+                    (self.Ju_h + transpose(self.Ju_h)) * self.v_h
+                ) * dx
+            elif hetero:
                 Auv -= inner(grad(self.mu_h), self.Ju_h * self.v_h) * dx
         else:
             Auv = self.mu_h * inner(grad(self.u_h), grad(self.v_h)) * dx
-            if hetero:
+            if hetero2:
+                Auv -= inner(
+                    grad(self.mu_h),
+                    (grad(self.u_h) + transpose(grad(self.u_h))) * self.v_h
+                ) * dx
+            elif hetero:
                 Auv -= inner(grad(self.mu_h), grad(self.u_h) * self.v_h) * dx
 
         # construct inner product

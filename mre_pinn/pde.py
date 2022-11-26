@@ -25,6 +25,8 @@ class WaveEquation(object):
             return HelmholtzEquation(**kwargs)
         elif pde_name == 'hetero':
             return HeteroEquation(**kwargs)
+        elif pde_name == 'hetero2':
+            return Hetero2Equation(**kwargs)
         elif pde_name == 'compress':
             return CompressEquation(**kwargs)
         elif pde_name == 'general':
@@ -127,6 +129,24 @@ class HeteroEquation(WaveEquation):
         grad_mu = jacobian(mu, x)
 
         return mu * div_grad_u + (grad_mu * grad_u).sum(dim=-1)
+
+
+class Hetero2Equation(WaveEquation):
+
+    def traction_forces(self, x, u, mu):
+
+        grad_u = jacobian(u, x)
+        grad_u_T = grad_u.transpose(-2,-1)
+        div_grad_u = divergence(grad_u, x)
+
+        if self.detach:
+            grad_u = grad_u.detach()
+            grad_u_T = grad_u_T.detach()
+            div_grad_u = div_grad_u.detach()
+
+        grad_mu = jacobian(mu, x)
+
+        return mu * div_grad_u + (grad_mu * (grad_u + grad_u_T)).sum(dim=-1)
 
 
 class CompressEquation(WaveEquation):
