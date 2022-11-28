@@ -1,10 +1,11 @@
 import os, pathlib, glob
+from functools import cache
 import numpy as np
 import xarray as xr
 import pandas as pd
 from sklearn.model_selection import KFold
 
-from ..utils import exists, print_if, as_xarray, is_iterable
+from ..utils import exists, print_if, as_xarray, is_iterable, progress
 from ..visual import XArrayViewer
 
 
@@ -62,6 +63,7 @@ class MREDataset(object):
             return self.examples[self.example_ids[idx]]
 
     @property
+    @cache
     def metadata(self):
         dfs = []
         for xid in self.example_ids:
@@ -71,9 +73,10 @@ class MREDataset(object):
         df = pd.concat(dfs).reset_index()
         return df.set_index(['example_id', 'variable', 'dimension'])
 
+    @cache
     def describe(self):
         dfs = []
-        for xid in self.example_ids:
+        for xid in progress(self.example_ids):
             df = self.examples[xid].describe()
             df['example_id'] = xid
             dfs.append(df)
@@ -122,12 +125,13 @@ class MREExample(object):
         arrays = patient.convert_images()
         sequences = ['t1_pre_in', 't1_pre_out', 't1_pre_water', 't1_pre_fat', 't2']
         new_dim = xr.DataArray(sequences, dims=['sequence'])
+        anat = xr.concat([arrays[a] for a in sequences], dim=new_dim)
         return MREExample(
             example_id,
             wave=arrays['wave'],
             mre=arrays['mre'],
             mre_mask=arrays['mre_mask'],
-            anat=xr.concat([arrays[a] for a in sequences], dim=new_dim),
+            anat=anat.rename(sequence='component'),
             anat_mask=arrays['anat_mask']
         )
 
@@ -142,7 +146,7 @@ class MREExample(object):
         if anat:
             anat = load_xarray_file(example_dir / 'anat.nc', verbose)
             anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
-            example['anat'] = anat
+            example['anat'] = anat.rename(sequence='component')
             example['anat_mask'] = anat_mask
         return example
 

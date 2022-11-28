@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from ..utils import as_iterable, print_if
 from .generic import get_activ_fn, ParallelNet
 
 
@@ -30,11 +31,11 @@ def describe(**kwargs):
         print(f'{key}\t{val.mean()}\t{val.std()}')
 
 
-class HyperCNN(torch.nn.Module):
+class MREPINO(torch.nn.Module):
 
     def __init__(
         self,
-        n_channels_in,
+        dataset,
         n_channels_block,
         n_conv_per_block,
         n_conv_blocks,
@@ -42,28 +43,52 @@ class HyperCNN(torch.nn.Module):
         n_latent,
         n_pinn_layers,
         n_pinn_hidden,
-        u_omega,
-        u_scale,
-        u_loc,
-        mu_omega,
-        mu_scale,
-        mu_loc,
+        conditional,
+        parallel,
+        omega,
+        polar_input=False,
+        complex_output=False,
         width_factor=1,
         width_term=0,
         depth_factor=1,
         depth_term=0,
         skip_connect=True,
         dense=True,
-        parallel=False,
         debug=False
     ):
         super().__init__()
 
+        metadata = dataset.metadata
+        metadata = metadata.reset_index().groupby(['variable', 'dimension']).mean()
+        self.x_loc = torch.tensor(metadata['center'].wave, dtype=torch.float32)
+        self.x_scale = torch.tensor(metadata['extent'].wave, dtype=torch.float32)
+
+        stats = dataset.describe()
+        stats = stats.reset_index().groupby(['variable', 'component']).mean()
+        self.u_loc = torch.tensor(stats['mean'].wave, dtype=torch.float32)
+        self.u_scale = torch.tensor(stats['std'].wave, dtype=torch.float32)
+        self.mu_loc = torch.tensor(stats['mean'].mre, dtype=torch.float32)
+        self.mu_scale = torch.tensor(stats['std'].mre, dtype=torch.float32)
+        self.a_loc = torch.tensor(stats['mean'].anat, dtype=torch.float32)
+        self.a_scale = torch.tensor(stats['std'].anat, dtype=torch.float32)
+        self.omega = torch.tensor(omega, dtype=torch.float32)
+
+        if debug:
+            print(self.x_loc.shape)
+            print(self.u_loc.shape)
+            print(self.a_loc.shape)
+            print(self.mu_loc.shape)
+
+        n_channels_block = as_iterable(n_channels_block)
+        n_conv_blocks = as_iterable(n_conv_blocks)
+        n_conv_per_block = as_iterable(n_conv_per_block)
+
         self.u_cnn = CNN(
-            n_channels_in=n_channels_in,
-            n_channels_block=n_channels_block,
-            n_conv_per_block=n_conv_per_block,
-            n_conv_blocks=n_conv_blocks,
+            xyz_shape_in=dataset[0].wave.field.spatial_shape,
+            n_channels_in=len(self.u_loc),
+            n_channels_block=n_channels_block[0],
+            n_conv_per_block=n_conv_per_block[0],
+            n_conv_blocks=n_conv_blocks[0],
             activ_fn=activ_fn,
             n_output=n_latent,
             width_factor=width_factor,
@@ -73,14 +98,14 @@ class HyperCNN(torch.nn.Module):
             skip_connect=skip_connect,
             debug=debug
         )
-        self.u_norm = nn.LayerNorm(n_latent)
 
-        if parallel:
-            self.mu_cnn = CNN(
-                n_channels_in=n_channels_in,
-                n_channels_block=n_channels_block,
-                n_conv_per_block=n_conv_per_block,
-                n_conv_blocks=n_conv_blocks,
+        if conditional:
+            self.a_cnn = CNN(
+                xyz_shape_in=dataset[0].anat.field.spatial_shape,
+                n_channels_in=len(self.a_loc),
+                n_channels_block=n_channels_block[1],
+                n_conv_per_block=n_conv_per_block[1],
+                n_conv_blocks=n_conv_blocks[1],
                 activ_fn=activ_fn,
                 n_output=n_latent,
                 width_factor=width_factor,
@@ -90,46 +115,63 @@ class HyperCNN(torch.nn.Module):
                 skip_connect=skip_connect,
                 debug=debug
             )
-            self.mu_norm = nn.LayerNorm(n_latent)
 
         self.u_pinn = HyperPINN(
-            n_latent=n_latent,
+            n_input=len(self.x_loc),
+            n_output=len(self.u_loc),
+            n_latent=n_latent * 2 if conditional and not parallel else n_latent,
             n_layers=n_pinn_layers,
             n_hidden=n_pinn_hidden,
-            omega=u_omega,
-            scale=u_scale,
-            loc=u_loc,
-            dense=dense
+            dense=dense,
+            polar_input=polar_input,
+            complex_output=complex_output,
+            polar_output=False
         )
         self.mu_pinn = HyperPINN(
-            n_latent=n_latent,
+            n_input=len(self.x_loc),
+            n_output=len(self.mu_loc),
+            n_latent=n_latent * 2 if conditional and not parallel else n_latent,
             n_layers=n_pinn_layers,
             n_hidden=n_pinn_hidden,
-            omega=mu_omega,
-            scale=mu_scale,
-            loc=mu_loc,
-            dense=dense
+            dense=dense,
+            polar_input=polar_input,
+            complex_output=complex_output,
+            polar_output=True
         )
-
-        self.parallel = parallel
         self.regularizer = None
+        self.conditional = conditional
+        self.parallel = parallel
 
-    def forward(self, inputs, debug=False):
+    def forward(self, inputs, debug=False, return_weights=False):
         a, u, x = inputs
-        h = self.u_cnn(u)
-        h = self.u_norm(h)
-        h = torch.tanh(h)
-        u_pred = self.u_pinn(h, x)
 
-        if self.parallel:
-            h = self.mu_cnn(u)
-            h = self.mu_norm(h)
-            h = torch.tanh(h)
+        a = (a - self.a_loc) / self.a_scale
+        u = (u - self.u_loc) / self.u_scale
+        x = (x - self.x_loc) / self.x_scale
+        x = x * self.omega
 
-        mu_pred = self.mu_pinn(h, x)
-        mu_pred = torch.nn.functional.leaky_relu(mu_pred)
+        h_u = self.u_cnn(u, debug=debug)
 
-        return u_pred, mu_pred
+        if self.conditional:
+            h_a = self.a_cnn(a, debug=debug)
+
+            if self.parallel:
+                h_mu = h_a
+            else:
+                h_u = h_mu = torch.cat([h_u, h_a], dim=-1)
+        else:
+            h_mu = h_u
+            
+        u_pred, u_weights, u_biases = self.u_pinn(h_u, x, debug=debug)
+        mu_pred, mu_weights, mu_biases = self.mu_pinn(h_mu, x, debug=debug)
+
+        u_pred  = u_pred  * self.u_scale  + self.u_loc
+        mu_pred = mu_pred * self.mu_scale + self.mu_loc
+
+        if return_weights:
+            return (u_pred, mu_pred), (u_weights, mu_weights), (u_biases, mu_biases)
+        else:
+            return u_pred, mu_pred
 
 
 class CNN(torch.nn.Module):
@@ -138,6 +180,7 @@ class CNN(torch.nn.Module):
     '''
     def __init__(
         self,
+        xyz_shape_in,
         n_channels_in,
         n_channels_block,
         n_conv_per_block,
@@ -152,7 +195,7 @@ class CNN(torch.nn.Module):
         debug=False
     ):
         super().__init__()
-        xyz_shape = np.array([256, 256, 4])
+        xyz_shape = np.array(xyz_shape_in)
         if debug:
             print('input\t\t', n_channels_in, xyz_shape)
 
@@ -221,14 +264,17 @@ class CNN(torch.nn.Module):
         '''
         a = torch.permute(a, (0, 4, 1, 2, 3))
         h = self.conv_in(a)
-
+        print_if(debug, h.shape)
         for i, (block, pool) in enumerate(zip(self.blocks, self.pools)):
             g = block(h)
+            print_if(debug, g.shape)
             if self.skip_connect:
                 g = torch.cat([h, g], dim=1)
             h = pool(g)
+            print_if(debug, h.shape)
 
         h = h.reshape(h.shape[0], -1)
+        print_if(debug, h.shape)
         return self.linear_out(h)
 
 
@@ -237,12 +283,16 @@ class HyperLinear(torch.nn.Module):
     Linear layer with parameters that are
     conditioned on an input latent vector.
     '''
-    def __init__(self, n_latent, n_features_in, n_features_out):
+    def __init__(self, n_latent, n_features_in, n_features_out, first=False):
         super().__init__()
         self.linear_w = nn.Linear(n_latent, n_features_out * n_features_in)
         self.linear_b = nn.Linear(n_latent, n_features_out)
+        self.w_norm = nn.LayerNorm(n_features_out * n_features_in)
+        self.b_norm = nn.LayerNorm(n_features_out)
+        self.w_std = 1 / n_features_in if first else np.sqrt(6 / n_features_in)
+        self.b_std = 1e-9
 
-    def forward(self, h, x):
+    def forward(self, h, x, debug=False):
         '''
         Args:
             h: (batch_size, n_latent)
@@ -250,76 +300,95 @@ class HyperLinear(torch.nn.Module):
         Returns:
             y: (batch_size, n_points, n_features_out)
         '''
-        w = self.linear_w(h)
-        b = self.linear_b(h)
+        w = 2 * normal_cdf(self.w_norm(self.linear_w(h))) - 1
+        b = 2 * normal_cdf(self.b_norm(self.linear_b(h))) - 1
         n_features_out = b.shape[1]
         n_features_in = w.shape[1] // n_features_out
-        w = w.view(-1, n_features_in, n_features_out)
-        b = b.view(-1, 1, n_features_out)
-        return torch.einsum('bxi,bio->bxo', x, w) + b
+        w = w.view(-1, n_features_in, n_features_out) * self.w_std
+        b = b.view(-1, 1, n_features_out) * self.b_std
+        return torch.einsum('bxi,bio->bxo', x, w) + b, w.detach(), b.detach()
+
+
+def normal_cdf(x, loc=0, scale=1):
+    return 0.5 * (1 + torch.erf((x - loc) / scale / np.sqrt(2)))
 
 
 class HyperPINN(torch.nn.Module):
 
     def __init__(
         self,
+        n_input,
+        n_output,
         n_latent,
         n_layers,
         n_hidden,
-        omega,
-        scale,
-        loc,
-        dense=True
+        dense=True,
+        polar_input=False,
+        complex_output=False,
+        polar_output=False
     ):
         assert n_layers > 0
         super().__init__()
-        n_input = 6
 
+        if polar_input:
+            n_input += 3
+
+        first = True
         self.hiddens = []
         for i in range(n_layers - 1):
-            hidden = HyperLinear(n_latent, n_input, n_hidden)
+            hidden = HyperLinear(n_latent, n_input, n_hidden, first)
             if dense:
                 n_input += n_hidden
             else:
                 n_input = n_hidden
             self.hiddens.append(hidden)
             self.add_module(f'hidden{i}', hidden)
+            first = False
 
-        self.output = HyperLinear(n_latent, n_input, 1)
+        if complex_output:
+            self.output = HyperLinear(n_latent, n_input, n_output * 2, first)
+        else:
+            self.output = HyperLinear(n_latent, n_input, n_output, first)
 
-        self.center = torch.zeros(1, 1, 3, dtype=torch.float32)
-        self.omega = torch.tensor(omega, dtype=torch.float32)
-        self.scale = torch.tensor(scale, dtype=torch.float32)
-        self.loc = torch.tensor(loc, dtype=torch.float32)
         self.dense = dense
+        self.polar_input = polar_input
+        self.complex_output = complex_output
+        self.polar_output = polar_output
 
-    def forward(self, h, x):
+    def forward(self, h, x, debug=False):
         '''
         Args:
             h: (batch_size, n_latent)
-            x: (batch_size, n_points, 3)
+            x: (batch_size, n_points, n_input)
         Returns:
-            y: (batch_size, n_points, 1)
+            y: (batch_size, n_points, n_output)
         '''
-        x = x * self.omega + self.center
-
-        # polar coordinates
-        x, y, z = torch.split(x, 1, dim=-1)
-        r = torch.sqrt(x**2 + y**2)
-        eps = 1
-        sin, cos = x / (r + eps), y / (r + eps)
-        x = torch.cat([x, y, z, r, sin, cos], dim=-1)
+        if self.polar_input: # polar coordinates
+            x, y, z = torch.split(x, 1, dim=-1)
+            r = torch.sqrt(x**2 + y**2)
+            sin, cos = x / (r + 1), y / (r + 1)
+            x = torch.cat([x, y, z, r, sin, cos], dim=-1)
 
         # hidden layers
+        weights = []
+        biases = []
         for i, hidden in enumerate(self.hiddens):
-            y = torch.sin(hidden(h, x))
+            a, w, b = hidden(h, x, debug=debug)
+            weights.append(w)
+            biases.append(b)
+            y = torch.sin(a)
             if self.dense:
                 x = torch.cat([x, y], dim=-1)
             else:
                 x = y
 
         # output layer
-        return self.output(h, x) * self.scale + self.loc
+        y, w, b = self.output(h, x, debug=debug)
+
+        if self.complex_output:
+            y = as_complex(y, polar=self.polar_output)
+        
+        return y, weights, biases
 
 
 class UNet(torch.nn.Module):

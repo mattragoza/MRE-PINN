@@ -6,7 +6,7 @@ import torch
 import torchvision.transforms.functional as TF
 import deepxde
 
-from ..utils import as_xarray
+from ..utils import as_xarray, minibatch
 from ..pde import laplacian
 from .losses import msae_loss
 
@@ -28,7 +28,7 @@ def affine_transform(a, rotate, translate, scale):
     return b
 
 
-class PINOData(deepxde.data.Data):
+class MREPINOData(deepxde.data.Data):
 
     def __init__(
         self,
@@ -37,10 +37,11 @@ class PINOData(deepxde.data.Data):
         pde,
         loss_weights,
         pde_warmup_iters=10000,
+        pde_init_weight=1e-19,
         pde_step_iters=5000,
         pde_step_factor=10,
         n_points=4096,
-        batch_size=None,
+        batch_size=8,
         device='cuda'
     ):
         self.train_set = train_set
@@ -51,7 +52,7 @@ class PINOData(deepxde.data.Data):
         self.pde_warmup_iters = pde_warmup_iters
         self.pde_step_iters = pde_step_iters
         self.pde_step_factor = pde_step_factor
-        self.pde_init_weight = 1e-19
+        self.pde_init_weight = pde_init_weight
         self.n_points = n_points
 
         self.train_sampler = deepxde.data.BatchSampler(len(train_set), shuffle=True)
@@ -59,20 +60,12 @@ class PINOData(deepxde.data.Data):
         self.batch_size = batch_size
         self.device = device
 
-        print('Precomputing tensors')
-        for idx in range(len(train_set)):
-            self.get_raw_tensors(train_set, idx)
-        for idx in range(len(test_set)):
-            self.get_raw_tensors(test_set, idx)
-
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         a_im, u_im, x = inputs
         u_true, mu_true = torch.split(targets, 1, dim=-1)
-        u_pred, mu_pred = outputs[:2]
+        u_pred, mu_pred = outputs
         u_loss = loss_fn(u_true, u_pred)
-        mu_true_mean = mu_true.mean(dim=(1,2), keepdim=True)
-        mu_pred_mean = mu_pred.mean(dim=(1,2), keepdim=True)
-        mu_loss = loss_fn(mu_true_mean, mu_pred_mean)
+        mu_loss = loss_fn(mu_true, mu_pred)
         pde_residual = self.pde(x, u_pred, mu_pred)
         pde_loss = loss_fn(0, pde_residual)
 
@@ -97,28 +90,25 @@ class PINOData(deepxde.data.Data):
         Returns:
             a, u, x, mu, mask: Raw tensors
         '''
-        example_id = dataset.example_ids[idx]
-        example = dataset.examples[example_id]
-
         # get numpy arrays from data example
         #   ensure that they have a channel dim
-        a = example.anat.transpose('x', 'y', 'z', 'sequence').values
+        example = dataset[idx]
+        a = example.anat.transpose('x', 'y', 'z', 'component').values
         u = example.wave.values[...,None]
-        x = example.wave.field.points(reshape=False) * 1e-3
+        x = example.wave.field.points(reshape=False)
         mu = example.mre.values[...,None]
-        mask = example.mre_mask.values
+        mask = (example.mre_mask.values > 0)
 
         # convert arrays to tensors on appropriate device
         a = torch.tensor(a, device=self.device, dtype=torch.float32)
         u = torch.tensor(u, device=self.device, dtype=torch.float32)
         x = torch.tensor(x, device=self.device, dtype=torch.float32)
         mu = torch.tensor(mu, device=self.device, dtype=torch.float32)
-        mask = torch.tensor(u, device=self.device, dtype=torch.bool)
+        mask = torch.tensor(mask, device=self.device, dtype=torch.bool)
 
         return a, u, x, mu, mask
 
     def get_tensors(self, dataset, idx, augment, use_mask):
-        
         a_im, u_im, x_im, mu_im, mask = self.get_raw_tensors(dataset, idx)
 
         if augment: # apply data augmentation
@@ -150,7 +140,7 @@ class PINOData(deepxde.data.Data):
         dataset,
         batch_sampler,
         batch_size=None,
-        augment=True,
+        augment=False,
         use_mask=True,
         return_inds=False
     ):
@@ -185,28 +175,33 @@ class PINOData(deepxde.data.Data):
         else:
             return inputs, targets, aux_vars
 
-    def train_next_batch(self, batch_size=None):
-        return self.get_next_batch(self.train_set, self.train_sampler, batch_size)
+    def train_next_batch(self, batch_size=None, **kwargs):
+        return self.get_next_batch(
+            self.train_set, self.train_sampler, batch_size, **kwargs
+        )
 
-    def test(self, batch_size=1, **kwargs):
+    def test(self, batch_size=None, **kwargs):
         return self.get_next_batch(
             self.test_set, self.test_sampler, batch_size, **kwargs
         )
 
 
-class PINOModel(deepxde.Model):
+class MREPINOModel(deepxde.Model):
     
     def __init__(self, train_set, test_set, net, pde, **kwargs):
 
         # initialize the training data
-        data = PINOData(train_set, test_set, pde, **kwargs)
-
-        # initialize the network weights
-        #TODO net.init_weights()
+        data = MREPINOData(train_set, test_set, pde, **kwargs)
 
         super().__init__(data, net)
+        self.next_dataset = 'train'
 
-    def benchmark(self, n_iters=100):
+    def view_weights(self):
+        inputs, targets, aux_vars = self.data.train_next_batch()
+        outputs, weights, biases = self.net(inputs, return_weights=True)
+        return weights, biases
+
+    def benchmark(self, n_iters=100, debug=False):
 
         print(f'# iterations: {n_iters}')
         data_time = 0
@@ -218,7 +213,7 @@ class PINOModel(deepxde.Model):
             t_data = time.time()
             a, u, x = inputs
             x.requires_grad = True
-            outputs = self.net(inputs)
+            outputs = self.net(inputs, debug=debug)
             t_model = time.time()
             losses = self.data.losses(targets, outputs, msae_loss, inputs, self)
             t_loss = time.time()
@@ -238,36 +233,54 @@ class PINOModel(deepxde.Model):
         print(f'10k iters time: {iter_time * 1e4 / 60:.2f}m')
         print(f'100k iters time: {iter_time * 1e5 / 3600:.2f}h')
 
-    def predict(self, inputs):
-        a, u, x = inputs
+    @minibatch
+    def predict(self, x, a, u):
         x.requires_grad = True
-        u_pred, mu_pred = self.net.forward(inputs, debug=True)
+        u_pred, mu_pred = self.net.forward(inputs=(a, u, x))
         lu_pred = laplacian(u_pred, x)
         f_trac, f_body = self.data.pde.traction_and_body_forces(x, u_pred, mu_pred)
-        return u_pred, mu_pred, lu_pred, f_trac, f_body
+        return (
+            u_pred.detach().cpu(),
+            mu_pred.detach().cpu(),
+            lu_pred.detach().cpu(),
+            f_trac.detach().cpu(),
+            f_body.detach().cpu()
+        )
 
     def test(self):
         
+        # get input tensors from either train or test dataset
+        if self.next_dataset == 'train':
+            inputs, targets, aux_vars, inds = self.data.train_next_batch(
+                batch_size=1, augment=False, use_mask=False, return_inds=True
+            )
+            dataset = self.data.train_set
+            curr_dataset, self.next_dataset = 'train', 'test'
+        else:
+            inputs, targets, aux_vars, inds = self.data.test(
+                batch_size=1, augment=False, use_mask=False, return_inds=True
+            )
+            dataset = self.data.test_set
+            curr_dataset, self.next_dataset = 'test', 'train'
+
         # get model predictions as tensors
-        inputs, targets, aux_vars, inds = self.data.test(
-            augment=False, use_mask=False, return_inds=True
-        )
-        u_pred, mu_pred, lu_pred, f_trac, f_body = self.predict(inputs)
+        a, u, x = inputs
+        x = x.reshape(-1, 1, x.shape[-1])
+        batch_size = self.data.batch_size * self.data.n_points
+        u_pred, mu_pred, lu_pred, f_trac, f_body = \
+            self.predict(x, a=a, u=u, batch_size=batch_size)
         #Mu_pred = -1000 * (2 * np.pi * 80)**2 * u_pred / lu_pred
 
         # get ground truth xarrays
-        a_true  = self.data.test_set[inds[0]].anat
-        u_true  = self.data.test_set[inds[0]].wave
-        mu_true = self.data.test_set[inds[0]].mre
-        a_mask  = self.data.test_set[inds[0]].anat_mask
-        m_mask  = self.data.test_set[inds[0]].mre_mask
-        Lu_true = self.data.test_set[inds[0]].Lwave
-        Mu_base = self.data.test_set[inds[0]].Mwave
+        u_true = dataset[inds[0]].wave
+        mu_true = dataset[inds[0]].mre
+        mu_direct = dataset[inds[0]].direct
+        mu_mask = dataset[inds[0]].mre_mask
+        Lu_true = dataset[inds[0]].Lu
 
         # apply mask level
         mask_level = 1.0
-        a_mask = (a_mask - 1) * mask_level + 1
-        m_mask = (m_mask - 1) * mask_level + 1
+        mu_mask = ((mu_mask > 0) - 1) * mask_level + 1
 
         # convert predicted tensors to xarrays
         u_shape, mu_shape = u_true.shape, mu_true.shape
@@ -275,54 +288,51 @@ class PINOModel(deepxde.Model):
         lu_pred = as_xarray(lu_pred.reshape(u_shape), like=u_true)
         f_trac  = as_xarray(f_trac.reshape(u_shape), like=u_true)
         f_body  = as_xarray(f_body.reshape(u_shape), like=u_true)
-        #Mu_pred = as_xarray(Mu_pred.reshape(mu_shape), like=Mu_true)
         mu_pred = as_xarray(mu_pred.reshape(mu_shape), like=mu_true)
         
-        # combine xarrays into single xarray
-        if False:
-            a_vars = ['a_mask', 'a_over', 'a_true']
-            a_dim = xr.DataArray(a_vars, dims=['variable'])
-            a = xr.concat([a_mask, a_mask * a_true, a_true], dim=a_dim)
-            a.name = 'anatomy'
-
         u_vars = ['u_pred', 'u_diff', 'u_true']
         u_dim = xr.DataArray(u_vars, dims=['variable'])
-        u = xr.concat(
-            [u_pred * m_mask, (u_true - u_pred) * m_mask, u_true * m_mask],
-            dim=u_dim
-        )
+        u = xr.concat([
+            mu_mask * u_pred,
+            mu_mask * (u_true - u_pred),
+            mu_mask * u_true
+        ], dim=u_dim)
         u.name = 'wave field'
 
         lu_vars = ['lu_pred', 'lu_diff', 'Lu_true']
         lu_dim = xr.DataArray(lu_vars, dims=['variable'])
-        lu = xr.concat(
-            [lu_pred * m_mask, (Lu_true - lu_pred) * m_mask, Lu_true * m_mask],
-            dim=lu_dim
-        )
+        lu = xr.concat([
+            mu_mask * lu_pred,
+            mu_mask * (Lu_true - lu_pred),
+            mu_mask * Lu_true
+        ], dim=lu_dim)
         lu.name = 'Laplacian'
 
         pde_vars = ['f_trac', 'pde_diff', 'pde_grad']
         pde_dim = xr.DataArray(pde_vars, dims=['variable'])
-        pde = xr.concat(
-            [f_trac * m_mask, (f_trac + f_body) * m_mask, 2 * lu_pred * (f_trac + f_body) * m_mask],
-            dim=pde_dim
-        )
+        pde = xr.concat([
+            mu_mask * f_trac,
+            mu_mask * (f_trac + f_body),
+            mu_mask * (f_trac + f_body) * lu_pred * 2
+        ], dim=pde_dim)
         pde.name = 'PDE'
 
         mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
         mu_dim = xr.DataArray(mu_vars, dims=['variable'])
-        mu = xr.concat(
-            [mu_pred * m_mask, (mu_true - mu_pred) * m_mask, mu_true * m_mask],
-            dim=mu_dim
-        )
+        mu = xr.concat([
+            mu_mask * mu_pred,
+            mu_mask * (mu_true - mu_pred),
+            mu_mask * mu_true
+        ],dim=mu_dim)
         mu.name = 'elastogram'
 
-        Mu_vars = ['Mu_base', 'Mu_diff', 'mu_true']
-        Mu_dim = xr.DataArray(Mu_vars, dims=['variable'])
-        Mu = xr.concat(
-            [Mu_base * m_mask, (Mu_base - mu_true) * m_mask, mu_true * m_mask],
-            dim=Mu_dim
-        )
-        Mu.name = 'baseline'
+        direct_vars = ['direct_pred', 'direct_diff', 'mu_true']
+        direct_dim = xr.DataArray(direct_vars, dims=['variable'])
+        direct = xr.concat([
+            mu_mask * mu_direct,
+            mu_mask * (mu_true - mu_direct),
+            mu_mask * mu_true
+        ], dim=direct_dim)
+        direct.name = 'direct'
 
-        return u, lu, pde, mu, Mu
+        return curr_dataset, (u, lu, pde, mu, direct)
