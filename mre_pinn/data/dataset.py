@@ -262,6 +262,8 @@ def load_xarray_file(nc_file, verbose=True):
     print_if(verbose, f'Loading {nc_file}')
     array = xr.open_dataarray(nc_file)
     if 'part' in array.dims:
+        if 'part' not in array.coords:
+            array['part'] = xr.DataArray(['real', 'imag'], dims='part')
         real = array.sel(part='real')
         imag = array.sel(part='imag')
         return real + 1j * imag
