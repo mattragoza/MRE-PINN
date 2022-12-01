@@ -373,23 +373,6 @@ def lowpass_filter_2d(u, resolution, threshold=100, order=1):
     return np.fft.ifftn(u_ft)
 
 
-def complex_normal(shape, loc, scale):
-    radius = np.random.randn(*shape) * scale 
-    angle = np.random.rand(*shape) * 2 * np.pi
-    return radius * np.exp(1j * angle) + loc
-
-
-def add_complex_noise(array, noise_ratio, axis=0):
-    array_abs = np.abs(array)
-    array_mean = np.mean(array_abs, axis=axis)
-    array_variance = np.var(array_abs, axis=axis)
-    array_power = array_mean**2 + array_variance
-    noise_power = noise_ratio * array_power
-    noise_std = np.sqrt(noise_power).values
-    noise = complex_normal(array.shape, loc=0, scale=noise_std)
-    return array + noise
-
-
 def select_data_subset(
     data,
     frequency=None,

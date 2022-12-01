@@ -236,7 +236,10 @@ class MREExample(object):
             else:
                 array = array.mean()
             arrays[var_name] = array
-        return MREExample(self.example_id, **arrays)     
+        return MREExample(self.example_id, **arrays)
+
+    def add_gaussian_noise(self, noise_ratio, axis=None):
+        self.arrays['wave'] = add_gaussian_noise(self.wave, noise_ratio, axis)
 
     def view(self, *args, mask=0, **kwargs):
         for var_name in (args or self.arrays):
@@ -270,3 +273,23 @@ def load_xarray_file(nc_file, verbose=True):
         return real + 1j * imag
     else:
         return array
+
+
+def complex_normal(loc, scale, size):
+    radius = np.random.randn(*size) * scale 
+    angle = np.random.rand(*size) * 2 * np.pi
+    return radius * np.exp(1j * angle) + loc
+
+
+def add_gaussian_noise(array, noise_ratio, axis=None):
+    array_abs = np.abs(array)
+    array_mean = np.mean(array_abs, axis=axis, keepdims=True)
+    array_variance = np.var(array_abs, axis=axis, keepdims=True)
+    array_power = array_mean**2 + array_variance
+    noise_power = noise_ratio * array_power
+    noise_std = np.sqrt(noise_power).values
+    if np.iscomplexobj(array):
+        noise = complex_normal(loc=0, scale=noise_std, size=array.shape)
+    else:
+        noise = np.random.normal(loc=0, scale=noise_std, size=array.shape)
+    return array + noise

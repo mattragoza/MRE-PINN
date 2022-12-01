@@ -17,6 +17,7 @@ def train(
     xarray_dir='data/BIOQIC/fem_box',
     example_id='60',
     frequency='auto',
+    noise_ratio=0,
 
     # pde settings
     pde_name='hetero',
@@ -56,6 +57,9 @@ def train(
         frequency = float(example.wave.frequency.item())
     else:
         frequency = float(frequency)
+
+    if noise_ratio > 0:
+        example.add_gaussian_noise(noise_ratio)
 
     mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
     mre_pinn.baseline.eval_fem_baseline(
