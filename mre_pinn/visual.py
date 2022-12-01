@@ -287,19 +287,6 @@ class XArrayViewer(Viewer):
         self.fig.canvas.draw()
 
 
-def my_line_plot(data, x, y, hue, hue_order, colors, ax, **kwargs):
-    lines = []
-    data = data.set_index(hue).sort_values(x)
-    for hue_level, color in zip(hue_order, colors):
-        if hue_level not in data.index:
-            lines.append(None)
-            continue
-        hue_data = data.loc[hue_level]
-        line, = ax.plot(hue_data[x], hue_data[y], color=color, label=hue_level)
-        lines.append(line)
-    return lines
-
-
 class DataViewer(Viewer):
     '''
     XArrayViewer but for a pd.DataFrame.
@@ -412,7 +399,7 @@ class DataViewer(Viewer):
                 ax.set_title(col_label)
                 ax.grid(linestyle=':')
 
-                lines = my_line_plot(
+                lines = line_plot(
                     data=data,
                     x=x_var,
                     y=y_var,
@@ -422,7 +409,6 @@ class DataViewer(Viewer):
                     ax=ax,
                     **kwargs
                 )
-                ax.set_yscale('log')
 
                 for hue_level, line in zip(hue_order, lines):
                     self.artists[index + (hue_level,)] = line
@@ -485,6 +471,19 @@ class DataViewer(Viewer):
 
         self.fig.canvas.draw()
 
+
+def line_plot(data, x, y, hue, hue_order, colors, ax, yscale='linear'):
+    lines = []
+    data = data.set_index(hue).sort_values(x)
+    for hue_level, color in zip(hue_order, colors):
+        if hue_level not in data.index:
+            lines.append(None)
+            continue
+        hue_data = data.loc[hue_level]
+        line, = ax.plot(hue_data[x], hue_data[y], color=color, label=hue_level)
+        lines.append(line)
+    ax.set_yscale(yscale)
+    return lines
 
 
 class Player(FuncAnimation):

@@ -51,6 +51,7 @@ class TestEvaluator(PeriodicCallback):
         # estimate % of time spent testing
         self.t_start = time.time()
         self.test_time = 0
+        self.n_tests = 0
 
     @property
     def iteration(self):
@@ -76,12 +77,13 @@ class TestEvaluator(PeriodicCallback):
         self.update_arrays(arrays)
         metrics = self.compute_metrics(dataset, arrays)
         self.update_metrics(metrics)
-        if self.plot:
+        if self.plot and self.n_tests > 0:
             self.update_plots()
         if self.view:
             self.update_viewers()
         if save_model and self.save_prefix: # save model state
             self.model.save(self.weight_prefix + '_model')
+        self.n_tests += 1
 
     def compute_metrics(self, dataset, arrays):
         
@@ -121,8 +123,8 @@ class TestEvaluator(PeriodicCallback):
             pred_var, diff_var, true_var = array['variable'].values
             a_pred = array.sel(variable=pred_var)
             a_true = array.sel(variable=true_var)
-            corr = xr.corr(np.abs(a_pred), np.abs(a_true))
-            index = (iter_, dataset, var_type, var_src, var_name, 'all', 'all')
+            value = xr.corr(np.abs(a_pred), np.abs(a_true))
+            index = (iter_, dataset, var_type, 'model', pred_var, 'all', 'all')
             metric = (index, 'R', value)
             metrics.append(metric)
 
@@ -158,7 +160,8 @@ class TestEvaluator(PeriodicCallback):
                 row='variable_source',
                 hue='dataset',
                 ax_height=1.5,
-                ax_width=1.25
+                ax_width=1.25,
+                yscale='log'
             )
             self.corr_plot = visual.DataViewer(
                 data,
@@ -167,7 +170,8 @@ class TestEvaluator(PeriodicCallback):
                 col='variable_type',
                 hue='dataset',
                 ax_height=1.5,
-                ax_width=1.25
+                ax_width=1.25,
+                yscale='linear'
             )
             self.freq_plot = visual.DataViewer(
                 data,
@@ -177,7 +181,8 @@ class TestEvaluator(PeriodicCallback):
                 row='variable_source',
                 hue='spatial_frequency_bin',
                 ax_height=1.5,
-                ax_width=1.25
+                ax_width=1.25,
+                yscale='log'
             )
             self.region_plot = visual.DataViewer(
                 data,
@@ -187,7 +192,8 @@ class TestEvaluator(PeriodicCallback):
                 row='variable_source',
                 hue='spatial_region',
                 ax_height=1.5,
-                ax_width=1.25
+                ax_width=1.25,
+                yscale='log'
             )
         if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
