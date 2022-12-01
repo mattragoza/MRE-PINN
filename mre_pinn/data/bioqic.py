@@ -210,10 +210,10 @@ class BIOQICPhantom(BIOQICSample):
         # identify cylindrical inclusions
         disk_mask = np.zeros((128, 80), dtype=int)
         disks = [
-            skimage.draw.disk(center=(50.0, 31.0), radius=4),
-            skimage.draw.disk(center=(77.0, 31.0), radius=4),
-            skimage.draw.disk(center=(50.0, 50.5), radius=4),
-            skimage.draw.disk(center=(75.0, 53.5), radius=4),
+            skimage.draw.disk(center=(50.0, 31.0), radius=5),
+            skimage.draw.disk(center=(77.0, 31.0), radius=5),
+            skimage.draw.disk(center=(50.0, 50.5), radius=5),
+            skimage.draw.disk(center=(75.0, 54.5), radius=5),
         ]
         disk_mask[disks[0]] = 1
         disk_mask[disks[1]] = 2
@@ -235,10 +235,15 @@ class BIOQICPhantom(BIOQICSample):
         wave = self.arrays.wave
         
         # ground truth physical parameters
+        #   mu is shear elasticity
+        #   eta is shear viscosity
         mu = np.array(
             [0, 10830, 43301, 5228, 6001, 16281]
-        )[spatial_region][np.newaxis,...]
+        )[spatial_region][np.newaxis,...] # Pa
+        eta = 1 # Pa·s
 
+        # springpot model
+        #   alpha interpolates b/tw spring and dashpot
         alpha = np.array(
             [0, 0.0226, 0.0460, 0.0272, 0.0247, 0.0345]
         )[spatial_region][np.newaxis,...]
@@ -247,8 +252,7 @@ class BIOQICPhantom(BIOQICSample):
         omega = 2 * np.pi * wave.frequency
         omega = np.expand_dims(omega, axis=axes)
 
-        # springpot model
-        eta = 1 # Pa·s
+        # springpot shear modulus
         mu = mu**(1 - alpha) * (1j * omega * eta)**alpha
 
         dims = ['frequency', 'x', 'y', 'z']
@@ -281,53 +285,92 @@ class BIOQICPhantom(BIOQICSample):
         #   and we extract the fundamental frequency across time
         #   and we do some noise reduction
 
-        u_median = u.median(dim=['t', 'x', 'y', 'z'])
-        phase_shift = (u_median / (2 * np.pi)).round() * (2 * np.pi)
-        u -= phase_shift
+        #u_median = u.median(dim=['t', 'x', 'y', 'z'])
+        #phase_shift = (u_median / (2 * np.pi)).round() * (2 * np.pi)
+        #u -= phase_shift
 
         # (frequency, t, x, y, z, component)
         u = u.values.astype(np.complex128)
 
-        # construct k-space lowpass filter
-        k_filter = lowpass_filter_2d(
-            u.shape[2:4], resolution[:2], threshold, order
-        )
         harmonic = 1
         for f in range(u.shape[0]): # frequency
             for c in range(u.shape[5]): # component
                 for t in range(u.shape[1]): # time
 
                     # Gaussian phase smoothing
-                    for z in range(u.shape[4]): # z slice
-                        u_ = np.exp(1j * u[f,t,...,z,c])
-                        u_ = scipy.ndimage.gaussian_filter(
-                            u_, sigma=sigma, truncate=truncate
-                        )
-                        u_ /= np.abs(u_)
-                        u[f,t,...,z,c] = np.angle(u_)
+                    u[f,t,...,c] = smooth_phase(u[f,t,...,c], sigma, truncate)
 
                     # gradient-based phase unwrapping
-                    u_     = np.exp( 1j * u[f,t,...,c])
-                    u_conj = np.exp(-1j * u[f,t,...,c])
-                    u_x, u_y, u_z = np.gradient(u_, *resolution)
-                    u[f,t,...,c] = (u_y * u_conj).imag
+                    u[f,t,...,c] = unwrap_phase(u[f,t,...,c], resolution)
 
                 # Fourier transform across time
                 u[f,...,c] = np.fft.fft(u[f,...,c], axis=0)
-                u[f,...,c] = u[f,harmonic:harmonic+1,...,c]
 
+                h = harmonic
                 for z in range(u.shape[4]): # z slice
 
                     # Butterworth low-pass filtering
-                    u_ = np.fft.fftn(u[f,t,...,z,c])
-                    u_ = u_ * k_filter
-                    u[f,t,...,z,c] = np.fft.ifftn(u_)
+                    u[f,h,...,z,c] = lowpass_filter_2d(u[f,h,...,z,c], resolution[:2])
+
+                # broadcast selected harmonic
+                u[f,:,...,c] = u[f,h:h+1,...,c]
 
         u = u * 1e-5 # scale hack
         self.arrays['wave'] = (self.arrays.wave.dims, u)
 
-        # average other variables across time
+        # average all variables across time
         self.arrays = self.arrays.mean('t')
+
+
+def smooth_phase(u, sigma=0.65, truncate=3):
+    '''
+    Args:
+        u: (n_x, n_y, n_z) phase image.
+    Returns:
+        (n_x, n_y, n_z) smoothed phase image.
+    '''
+    u_comp = np.exp(1j * u)
+    u_comp = scipy.ndimage.gaussian_filter(u_comp, sigma=sigma, truncate=truncate)
+    return np.angle(u_comp)
+
+
+def unwrap_phase(u, resolution, component=1):
+    '''
+    Args:
+        u: (n_x, n_y, n_z) phase image.
+    Returns:
+        (n_x, n_y, n_z) unwrapped phase image.
+    '''
+    u_comp = np.exp( 1j * u)
+    u_conj = np.exp(-1j * u)
+    u_grad = np.gradient(u_comp, *resolution)[component]
+    return (u_grad * u_conj).imag
+
+
+def lowpass_filter_2d(u, resolution, threshold=100, order=1):
+    '''
+    Args:
+        u: (n_x, n_y) wave field
+    Returns:
+        (n_x, n_y) shear wave field
+    '''
+    nax = np.newaxis
+    n_x, n_y = u.shape
+    dx, dy = resolution
+
+    # construct the filter kernel in Fourier domain
+    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * dx)
+    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * dy)
+    abs_k = np.sqrt(
+        np.abs(k_x)[:,nax]**2 + np.abs(k_y)[nax,:]**2
+    )
+    k = 1 / (1 + (abs_k / threshold)**(2 * order))
+    k = np.fft.ifftshift(k)
+
+    # apply the filter
+    u_ft = np.fft.fftn(u)
+    u_ft *= k
+    return np.fft.ifftn(u_ft)
 
 
 def complex_normal(shape, loc, scale):
@@ -345,35 +388,6 @@ def add_complex_noise(array, noise_ratio, axis=0):
     noise_std = np.sqrt(noise_power).values
     noise = complex_normal(array.shape, loc=0, scale=noise_std)
     return array + noise
-
-
-def lowpass_filter_2d(shape, resolution, threshold=100, order=1):
-    nax = np.newaxis
-    n_x, n_y = shape
-    x_res, y_res = resolution
-    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * x_res)
-    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * y_res)
-    abs_k = np.sqrt(
-        np.abs(k_x)[:,nax]**2 + np.abs(k_y)[nax,:]**2
-    )
-    k = 1 / (1 + (abs_k / threshold)**(2 * order))
-    return np.fft.ifftshift(k)
-
-
-def lowpass_filter_3d(shape, resolution, threshold=100, order=1):
-    nax = np.newaxis
-    n_x, n_y, n_z = shape
-    x_res, y_res, z_res = resolution
-    k_x = -(np.arange(n_x) - np.fix(n_x / 2)) / (n_x * x_res)
-    k_y = -(np.arange(n_y) - np.fix(n_y / 2)) / (n_y * y_res)
-    k_z = -(np.arange(n_z) - np.fix(n_z / 2)) / (n_z * z_res)
-    abs_k = np.sqrt(
-        np.abs(k_x)[:,nax,nax]**2 +
-        np.abs(k_y)[nax,:,nax]**2 +
-        np.abs(k_z)[nax,nax,:]**2
-    )
-    k = 1 / (1 + (abs_k / threshold)**(2 * order))
-    return np.fft.ifftshift(k)
 
 
 def select_data_subset(

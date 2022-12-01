@@ -238,15 +238,16 @@ class MREExample(object):
             arrays[var_name] = array
         return MREExample(self.example_id, **arrays)     
 
-    def view(self, *args, mask=False, **kwargs):
+    def view(self, *args, mask=0, **kwargs):
         for var_name in (args or self.arrays):
             array = self.arrays[var_name]
-            if mask:
+            if mask > 0:
                 if var_name == 'anat':
                     m = self.arrays.get('anat_mask', 'spatial_region')
                 else:
                     m = self.arrays.get('mre_mask', 'spatial_region')
-                array = as_xarray(array * (m > 0), like=array)
+                m = ((m > 0) - 1) * mask + 1
+                array = as_xarray(array * m, like=array)
             XArrayViewer(array, **kwargs)
 
 

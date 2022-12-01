@@ -6,7 +6,7 @@ import scipy.interpolate
 import ufl, dolfinx
 from mpi4py import MPI
 
-from ..utils import print_if, as_xarray, minibatch
+from ..utils import print_if, as_xarray, minibatch, progress
 from . import filters
 
 
@@ -15,10 +15,11 @@ def eval_fem_baseline(
     frequency,
     component=['x', 'y'],
     hetero=True,
-    hetero2=True,
-    u_elem_type='CG-2',
-    mu_elem_type='CG-1',
+    hetero2=False,
+    u_elem_type='CG-3',
+    mu_elem_type='DG-1',
     align_nodes=True,
+    mesh_scale=1,
     savgol_filter=True,
     order=2,
     kernel_size=3,
@@ -33,8 +34,7 @@ def eval_fem_baseline(
         u = xr.concat([u, o, o], dim=new_dim)
 
     mu = []
-    for i, z in enumerate(u.z): # z slice
-        print(f'Solving slice {i+1}/{len(u.z)}')
+    for i, z in progress(list(enumerate(u.z))): # z slice
         if u.field.has_components:
             u_z = u.sel(z=z, component=component)
         else:
@@ -44,6 +44,7 @@ def eval_fem_baseline(
             u_elem_type=u_elem_type,
             mu_elem_type=mu_elem_type,
             align_nodes=align_nodes,
+            mesh_scale=mesh_scale,
             savgol_filter=savgol_filter,
             order=order,
             kernel_size=kernel_size,
@@ -52,6 +53,7 @@ def eval_fem_baseline(
             verbose=False
         )
         fem.solve(frequency=frequency, hetero=hetero, hetero2=hetero2)
+        # evaluate domain interior
         x_z = u_z.field.spatial_points(reshape=False)
         x_z[ 0,:,0] = x_z[ 1,:,0]
         x_z[-1,:,0] = x_z[-2,:,0]
@@ -82,16 +84,17 @@ class MREFEM(object):
         u_elem_type='CG-2',
         mu_elem_type='CG-1',
         align_nodes=True,
+        mesh_scale=1,
         savgol_filter=True,
-        order=3,
-        kernel_size=5,
-        despeckle=False,
+        order=2,
+        kernel_size=3,
+        despeckle=True,
         threshold=3,
         verbose=True
     ):
         # initialize the mesh
         print_if(verbose, 'Creating mesh from data')
-        mesh = create_mesh_from_data(wave, align_nodes)
+        mesh = create_mesh_from_data(wave, align_nodes, mesh_scale)
 
         # determine the FEM element types
         u_elem_type = parse_elem_type(u_elem_type)
@@ -212,7 +215,7 @@ def grid_info_from_data(data):
     return x_min, x_max, shape
 
 
-def grid_to_mesh_info(x_min, x_max, shape, align_nodes):
+def grid_to_mesh_info(x_min, x_max, shape, align_nodes, mesh_scale):
     '''
     Args:
         x_min: The minimum grid point.
@@ -231,13 +234,15 @@ def grid_to_mesh_info(x_min, x_max, shape, align_nodes):
     # compute resolution in each dimension
     x_res = (x_max - x_min) / (shape - 1)
 
+    shape = [d // mesh_scale for d in shape]
+
     if align_nodes: # align nodes to data
-        shape = [d - 1 for d in shape]
+        shape = [(d - 1) for d in shape]
 
     else: # align cells to data
-        x_min -= x_res / 2
-        x_max += x_res / 2
-    
+        x_min += x_res / 2
+        x_max -= x_res / 2
+
     return x_min, x_max, shape
 
 
@@ -282,13 +287,13 @@ def create_uniform_mesh(x_min, x_max, shape):
     return mesh
 
 
-def mesh_info_from_data(data, align_nodes):
+def mesh_info_from_data(data, align_nodes, mesh_scale):
     x_min, x_max, shape = grid_info_from_data(data)
-    return grid_to_mesh_info(x_min, x_max, shape, align_nodes)
+    return grid_to_mesh_info(x_min, x_max, shape, align_nodes, mesh_scale)
 
 
-def create_mesh_from_data(data, align_nodes):
-    x_min, x_max, shape = mesh_info_from_data(data, align_nodes)
+def create_mesh_from_data(data, align_nodes, mesh_scale):
+    x_min, x_max, shape = mesh_info_from_data(data, align_nodes, mesh_scale)
     return create_uniform_mesh(x_min, x_max, shape)
 
 
