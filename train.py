@@ -17,7 +17,7 @@ def train(
     xarray_dir='data/BIOQIC/fem_box',
     example_id='60',
     frequency='auto',
-    noise_ratio=0,
+    noise_ratio=0.0,
 
     # pde settings
     pde_name='hetero',
