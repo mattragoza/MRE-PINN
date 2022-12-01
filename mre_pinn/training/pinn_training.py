@@ -213,12 +213,15 @@ class MREPINNModel(deepxde.Model):
         ], dim=lu_dim)
         lu.name = 'Laplacian'
 
-        pde_vars = ['f_trac', 'pde_diff', 'pde_grad']
+        pde_vars = ['pde_grad', 'pde_diff', 'mu_diff']
         pde_dim = xr.DataArray(pde_vars, dims=['variable'])
+        pde_grad = -((f_trac + f_body) * lu_pred * 2).sum('component')
+        pde_grad *= self.data.loss_weights[2]
+        mu_diff = mu_true - mu_pred
         pde = xr.concat([
-            mu_mask * f_trac,
-            mu_mask * (f_trac + f_body),
-            mu_mask * (f_trac + f_body) * lu_pred * 2
+            mu_mask * pde_grad,
+            mu_mask * (mu_diff - pde_grad),
+            mu_mask * mu_diff
         ], dim=pde_dim)
         pde.name = 'PDE'
 
@@ -226,7 +229,7 @@ class MREPINNModel(deepxde.Model):
         mu_dim = xr.DataArray(mu_vars, dims=['variable'])
         mu = xr.concat([
             mu_mask * mu_pred,
-            mu_mask * (mu_true - mu_pred),
+            mu_mask * mu_diff,
             mu_mask * mu_true
         ],dim=mu_dim)
         mu.name = 'elastogram'

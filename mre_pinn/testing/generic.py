@@ -209,8 +209,7 @@ class TestEvaluator(PeriodicCallback):
         except AttributeError: # initialize viewers
             self.viewers = []
             for i, array in enumerate(arrays):
-                var = array['variable'][2]
-                kwargs = visual.get_color_kws(array.sel(variable=var))
+                kwargs = visual.get_color_kws(array)
                 viewer = visual.XArrayViewer(
                     array,
                     row='part' if array.field.is_complex else None,
