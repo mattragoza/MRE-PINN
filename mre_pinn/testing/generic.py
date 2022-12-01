@@ -90,7 +90,7 @@ class TestEvaluator(PeriodicCallback):
         sources = ['model', 'residual', 'reference']
 
         metrics = []
-        for array in arrays: # wave field, laplacian, elastogram, baseline
+        for array in arrays: # wave field, Laplacian, PDE, elastogram, direct, FEM
             var_type = array.name
 
             # model, residual, or reference
@@ -117,6 +117,15 @@ class TestEvaluator(PeriodicCallback):
                     metric = (index, 'MAV', value)
                     metrics.append(metric)
 
+            # also compute correlation
+            pred_var, diff_var, true_var = array['variable'].values
+            a_pred = array.sel(variable=pred_var)
+            a_true = array.sel(variable=true_var)
+            corr = xr.corr(np.abs(a_pred), np.abs(a_true))
+            index = (iter_, dataset, var_type, var_src, var_name, 'all', 'all')
+            metric = (index, 'R', value)
+            metrics.append(metric)
+
         return metrics
 
     def update_arrays(self, arrays, save=True):
@@ -137,6 +146,7 @@ class TestEvaluator(PeriodicCallback):
         data = self.metrics.reset_index()
         try:
             self.norm_plot.update_data(data)
+            self.corr_plot.update_data(data)
             self.freq_plot.update_data(data)
             self.region_plot.update_data(data)
         except AttributeError:
@@ -146,6 +156,15 @@ class TestEvaluator(PeriodicCallback):
                 y='MSAV',
                 col='variable_type',
                 row='variable_source',
+                hue='dataset',
+                ax_height=1.5,
+                ax_width=1.25
+            )
+            self.corr_plot = visual.DataViewer(
+                data,
+                x='iteration',
+                y='R',
+                col='variable_type',
                 hue='dataset',
                 ax_height=1.5,
                 ax_width=1.25
@@ -172,6 +191,7 @@ class TestEvaluator(PeriodicCallback):
             )
         if save and self.save_prefix:
             self.norm_plot.to_png(self.save_prefix + '_train_norms.png') 
+            self.corr_plot.to_png(self.save_prefix + '_train_corrs.png')
             self.freq_plot.to_png(self.save_prefix + '_train_freqs.png')
             self.region_plot.to_png(self.save_prefix + '_train_regions.png')
 
