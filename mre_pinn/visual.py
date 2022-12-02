@@ -571,14 +571,21 @@ class Player(FuncAnimation):
         self.slider.set_val(i)
 
 
-def grayscale_color_map(n_colors=255, reverse=False, symmetric=False):
-    '''
-    Create a colormap for MRI magnitude images
-    from black to white.
-    '''
-    black = (0, 0, 0)
-    white = (1, 1, 1)
+COLORS = {
+    'black':  (0.0, 0.0, 0.0),
+    'white':  (1.0, 1.0, 1.0),
+    'red':    (1.0, 0.0, 0.0),
+    'yellow': (1.0, 1.0, 0.0),
+    'green':  (0.0, 0.8, 0.0),
+    'cyan':   (0.0, 1.0, 1.0),
+    'blue' :  (0.0, 0.0, 1.0),
+    'purple': (1.0, 0.0, 1.0),
+}
 
+
+def grayscale_color_map(n_colors=255, reverse=False, symmetric=False):
+    black = COLORS['black']
+    white = COLORS['white']
     if symmetric and reverse:
         colors = [black, white, black]
     elif symmetric:
@@ -587,56 +594,34 @@ def grayscale_color_map(n_colors=255, reverse=False, symmetric=False):
         colors = [white, black]
     else:
         colors = [black, white]
-
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='magnitude', colors=colors, N=n_colors
     )
 
 
-def wave_color_map(n_colors=255, reverse=False):
-    '''
-    Create a colormap for MRE wave images
-    from yellow, red, black, blue, to cyan.
-    '''
-    cyan   = (0, 1, 1)
-    blue   = (0, 0, 1)
-    black  = (0, 0, 0)
-    red    = (1, 0, 0)
-    yellow = (1, 1, 0)
-
-    colors = [cyan, blue, black, red, yellow]
-
-    if reverse:
-        colors = colors[::-1]
-
+def wave_color_map(n_colors=255):
+    colors = [
+        COLORS['cyan'],
+        COLORS['blue'],
+        COLORS['black'],
+        COLORS['red'],
+        COLORS['yellow'],
+    ]
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='wave', colors=colors, N=n_colors
     )
 
 
-def elast_color_map(n_colors=255, symmetric=False):
-    '''
-    Create a colormap for MRE elastrograms
-    from dark, blue, cyan, green, yellow, to red.
-    '''
-    p = 0.0
-    c = 0.9 #0.6
-    y = 0.9
-    g = 0.8
-
-    dark   = (p, 0, p)
-    blue   = (0, 0, 1)
-    cyan   = (0, c, 1)
-    green  = (0, g, 0)
-    yellow = (1, y, 0)
-    red    = (1, 0, 0)
-
-    colors = [dark, blue, cyan, green, yellow, red]
-    if symmetric:
-        colors = colors[::-1] + colors[1:]
-
+def mre_color_map(n_colors=255):
+    colors = [
+        COLORS['yellow'],
+        COLORS['red'],
+        COLORS['black'],
+        COLORS['blue'],
+        COLORS['cyan'],
+    ]
     return mpl.colors.LinearSegmentedColormap.from_list(
-        name='elast', colors=colors, N=n_colors
+        name='mre', colors=colors, N=n_colors
     )
 
 
@@ -645,21 +630,18 @@ def region_color_map(n_colors=255, has_background=False):
     Create a colormap for segmentation regions
     from white, red, yellow, green, to blue.
     '''
-    black  = (0, 0, 0)
-    white  = (1, 1, 1)
-    red    = (1, 0, 0)
-    yellow = (1, 1, 0)
-    green  = (0, 0.8, 0)
-    blue   = (0, 0, 1)
-    purple = (1, 0, 1)
-
+    colors = [
+        COLORS['white'],
+        COLORS['red'],
+        COLORS['yellow'],
+        COLORS['green'],
+        COLORS['blue'],
+    ]
     if has_background:
-        colors = [black, white, red, yellow, green, blue]
-    else:
-        colors = [white, red, yellow, green, blue]
+        colors.insert(0, COLORS['black'])
 
     return mpl.colors.LinearSegmentedColormap.from_list(
-        name='elast', colors=colors, N=n_colors
+        name='region', colors=colors, N=n_colors
     )
 
 
@@ -677,7 +659,7 @@ def get_color_kws(array, pct=99, scale=1.1):
         vmax = np.percentile(np.abs(array), pct) * scale
         return dict(cmap=cmap, vmin=vmin, vmax=vmax)
     elif array.name in {'mre', 'mu', 'Mu', 'elast', 'elastogram', 'baseline', 'mre', 'Mwave', 'fem', 'FEM', 'direct', 'PDE'}:
-        cmap = wave_color_map(reverse=True)
+        cmap = mre_color_map()
         vmax = np.percentile(np.abs(array), pct) * scale #2e4
     elif array.name == 'compare':
         cmap = grayscale_color_map(symmetric=True)
