@@ -215,7 +215,9 @@ class MREPINNModel(deepxde.Model):
 
         pde_vars = ['pde_grad', 'pde_diff', 'mu_diff']
         pde_dim = xr.DataArray(pde_vars, dims=['variable'])
-        pde_grad = -((f_trac + f_body) * lu_pred * 2).sum('component')
+        pde_grad = -((f_trac + f_body) * lu_pred * 2)
+        if 'component' in pde_grad.sizes:
+            pde_grad = pde_grad.sum('component')
         pde_grad *= self.data.loss_weights[2]
         mu_diff = mu_true - mu_pred
         pde = xr.concat([
