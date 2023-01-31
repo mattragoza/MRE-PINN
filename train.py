@@ -18,6 +18,7 @@ def train(
     example_id='60',
     frequency='auto',
     noise_ratio=0.0,
+    anatomical=False,
 
     # pde settings
     pde_name='hetero',
@@ -27,7 +28,6 @@ def train(
     n_layers=5,
     n_hidden=128,
     activ_fn='s',
-    conditional=False,
     polar_input=False,
 
     # training settings
@@ -35,6 +35,7 @@ def train(
     learning_rate=1e-4,
     u_loss_weight=1,
     mu_loss_weight=0,
+    a_loss_weight=0,
     pde_loss_weight=1e-16,
     pde_warmup_iters=10000,
     pde_init_weight=1e-18,
@@ -51,7 +52,8 @@ def train(
     # load the training data
     example = mre_pinn.data.MREExample.load_xarrays(
         xarray_dir=xarray_dir,
-        example_id=example_id
+        example_id=example_id,
+        anat=anatomical
     )
     if frequency == 'auto': # infer from data
         frequency = float(example.wave.frequency.item())
@@ -80,8 +82,7 @@ def train(
         omega=omega,
         n_layers=n_layers,
         n_hidden=n_hidden,
-        polar_input=polar_input,
-        conditional=conditional
+        polar_input=polar_input
     )
     print(pinn)
 

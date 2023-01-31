@@ -97,12 +97,13 @@ class MREExample(object):
     '''
     A single instance of preprocessed MRE imaging sequences.
     '''
-    def __init__(self, example_id, wave, mre, mre_mask, **arrays):
+    def __init__(self, example_id, wave, mre, mre_mask, anat=None):
         self.example_id = example_id
         wave = wave.assign_coords(region=mre_mask)
         mre = mre.assign_coords(region=mre_mask)
         self.arrays = {'wave': wave, 'mre': mre, 'mre_mask': mre_mask}
-        self.arrays.update({k: v for k, v in arrays.items() if exists(v)})
+        if anat is not None:
+            self.arrays['anat'] = anat.assign_coords(region=mre_mask)
 
     @classmethod
     def from_bioqic(cls, bioqic, frequency):
@@ -142,12 +143,14 @@ class MREExample(object):
         wave = load_xarray_file(example_dir / 'wave.nc', verbose)
         mre  = load_xarray_file(example_dir / 'mre.nc',  verbose)
         mre_mask  = load_xarray_file(example_dir / 'mre_mask.nc',  verbose)
-        example = MREExample(example_id, wave, mre, mre_mask)
         if anat:
             anat = load_xarray_file(example_dir / 'anat.nc', verbose)
             anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
-            example['anat'] = anat.rename(sequence='component')
-            example['anat_mask'] = anat_mask
+            if 'sequence' in anat:
+                anat = anat.rename(sequence='component')
+            example = MREExample(example_id, wave, mre, mre_mask, anat=anat)
+        else:
+            example = MREExample(example_id, wave, mre, mre_mask)
         return example
 
     def save_xarrays(self, xarray_dir, verbose=True):
@@ -246,9 +249,9 @@ class MREExample(object):
             array = self.arrays[var_name]
             if mask > 0:
                 if var_name == 'anat':
-                    m = self.arrays.get('anat_mask', 'spatial_region')
+                    m = self.arrays['mre_mask']
                 else:
-                    m = self.arrays.get('mre_mask', 'spatial_region')
+                    m = self.arrays['mre_mask']
                 m = ((m > 0) - 1) * mask + 1
                 array = as_xarray(array * m, like=array)
             XArrayViewer(array, **kwargs)

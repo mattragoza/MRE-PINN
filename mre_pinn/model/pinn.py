@@ -7,7 +7,7 @@ from .generic import get_activ_fn, ParallelNet
 
 class MREPINN(torch.nn.Module):
 
-    def __init__(self, example, conditional, omega, **kwargs):
+    def __init__(self, example, omega, **kwargs):
         super().__init__()
 
         metadata = example.metadata
@@ -21,14 +21,15 @@ class MREPINN(torch.nn.Module):
         self.mu_scale = torch.tensor(stats['std'].mre)
         self.omega = torch.tensor(omega)
 
-        if conditional:
-            a_loc = torch.tensor(stats['mean'].anat.astype(float), dtype=torch.float32)
-            a_scale = torch.tensor(stats['std'].anat.astype(float), dtype=torch.float32)
-            self.input_loc = torch.cat([x_center] + [a_loc] * 25)
-            self.input_scale = torch.cat([x_extent] + [a_scale] * 25)
+        if 'anat' in example:
+            self.a_loc = torch.tensor(stats['mean'].anat)
+            self.a_scale = torch.tensor(stats['std'].anat)
         else:
-            self.input_loc = x_center
-            self.input_scale = x_extent
+            self.a_loc = torch.zeros(0)
+            self.a_scale = torch.zeros(0)
+
+        self.input_loc = x_center
+        self.input_scale = x_extent
 
         self.u_pinn = PINN(
             n_input=len(self.input_loc),
@@ -39,23 +40,30 @@ class MREPINN(torch.nn.Module):
         )
         self.mu_pinn = PINN(
             n_input=len(self.input_loc),
-            n_output=len(self.mu_loc),
+            n_output=len(self.mu_loc) + len(self.a_loc),
             complex_output=example.mre.field.is_complex,
             polar_output=True,
             **kwargs
         )
         self.regularizer = None
-        self.conditional = conditional
 
     def forward(self, inputs):
-        x, a = inputs
-        if self.conditional:
-            x = torch.cat([x, a], dim=-1)
+        x, = inputs
         x = (x - self.input_loc) / self.input_scale
         x = x * self.omega
-        u_pred = self.u_pinn(x) * self.u_scale + self.u_loc
-        mu_pred = self.mu_pinn(x) * self.mu_scale + self.mu_loc
-        return u_pred, mu_pred
+
+        u_pred = self.u_pinn(x)
+        u_pred = u_pred * self.u_scale + self.u_loc
+
+        mu_a_pred = self.mu_pinn(x)
+        mu_pred, a_pred = (
+            mu_a_pred[:,:len(self.mu_loc)],
+            mu_a_pred[:,len(self.mu_loc):]
+        )
+        mu_pred = mu_pred * self.mu_scale + self.mu_loc
+        a_pred = a_pred * self.a_scale + self.a_loc
+
+        return u_pred, mu_pred, a_pred
 
 
 class PINN(torch.nn.Module):
