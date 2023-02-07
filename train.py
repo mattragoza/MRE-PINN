@@ -19,6 +19,7 @@ def train(
     frequency='auto',
     noise_ratio=0.0,
     anatomical=False,
+    patch_size=1,
 
     # pde settings
     pde_name='hetero',
@@ -33,9 +34,9 @@ def train(
     # training settings
     optimizer='adam',
     learning_rate=1e-4,
-    u_loss_weight=1,
-    mu_loss_weight=0,
-    a_loss_weight=0,
+    u_loss_weight=1.0,
+    mu_loss_weight=0.0,
+    a_loss_weight=0.0,
     pde_loss_weight=1e-16,
     pde_warmup_iters=10000,
     pde_init_weight=1e-18,
@@ -89,12 +90,13 @@ def train(
     # compile model and configure training settings
     model = mre_pinn.training.MREPINNModel(
         example, pinn, pde,
-        loss_weights=[u_loss_weight, mu_loss_weight, pde_loss_weight],
+        loss_weights=[u_loss_weight, mu_loss_weight, a_loss_weight, pde_loss_weight],
         pde_warmup_iters=pde_warmup_iters,
         pde_step_iters=pde_step_iters,
         pde_step_factor=pde_step_factor,
         pde_init_weight=pde_init_weight,
-        n_points=n_points
+        n_points=n_points,
+        patch_size=patch_size
     )
     model.compile(optimizer='adam', lr=learning_rate, loss=msae_loss)
     model.benchmark(100)
