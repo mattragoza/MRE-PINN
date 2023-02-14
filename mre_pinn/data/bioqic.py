@@ -36,12 +36,12 @@ class BIOQICSample(object):
     def load_mat(self, verbose=True):
         data, rev_axes = load_mat_file(self.mat_file, verbose)
 
-        wave = data[self.wave_var].T if rev_axes else mat[wave_var]
+        wave = data[self.wave_var].T if rev_axes else data[self.wave_var]
         wave = self.add_metadata(wave)
         self.arrays = xr.Dataset(dict(wave=wave))
 
         if self.anat_var is not None:
-            anat = data[self.anat_var].T if rev_axes else mat[anat_var]
+            anat = data[self.anat_var].T if rev_axes else data[self.anat_var]
             anat = self.add_metadata(anat)
             self.arrays['anat'] = anat
 
