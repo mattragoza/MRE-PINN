@@ -7,7 +7,7 @@ from .generic import get_activ_fn, ParallelNet
 
 class MREPINN(torch.nn.Module):
 
-    def __init__(self, example, omega, **kwargs):
+    def __init__(self, example, omega, activ_fn='ss', **kwargs):
         super().__init__()
 
         metadata = example.metadata
@@ -36,6 +36,7 @@ class MREPINN(torch.nn.Module):
             n_output=len(self.u_loc),
             complex_output=example.wave.field.is_complex,
             polar_output=False,
+            activ_fn=activ_fn[0],
             **kwargs
         )
         self.mu_pinn = PINN(
@@ -43,6 +44,7 @@ class MREPINN(torch.nn.Module):
             n_output=len(self.mu_loc) + len(self.a_loc),
             complex_output=example.mre.field.is_complex,
             polar_output=True,
+            activ_fn=activ_fn[1],
             **kwargs
         )
         self.regularizer = None
@@ -74,6 +76,7 @@ class PINN(torch.nn.Module):
         n_output,
         n_layers,
         n_hidden,
+        activ_fn='s',
         dense=True,
         polar_input=False,
         complex_output=False,
@@ -100,6 +103,7 @@ class PINN(torch.nn.Module):
         else:
             self.output = torch.nn.Linear(n_input, n_output)
 
+        self.activ_fn = get_activ_fn(activ_fn)
         self.dense = dense
         self.polar_input = polar_input
         self.complex_output = complex_output
@@ -122,7 +126,7 @@ class PINN(torch.nn.Module):
 
         # hidden layers
         for i, hidden in enumerate(self.hiddens):
-            y = torch.sin(hidden(x))
+            y = self.activ_fn(hidden(x))
             if self.dense:
                 x = torch.cat([x, y], dim=1)
             else:
