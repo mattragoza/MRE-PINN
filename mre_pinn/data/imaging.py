@@ -245,8 +245,8 @@ class ImagingPatient(object):
     def preprocess(
         self,
         wave_vmax=1e-1,
-        same_grid=False,
-        anat_size=(256, 256, 16),
+        same_grid=True,
+        anat_size=(256, 256, 4),
         mre_size=(256, 256, 4),
         model=None
     ):
@@ -271,11 +271,15 @@ class ImagingPatient(object):
         #   so we resize the main anatomic image to that size before
         #   providing it as input to the segmentation model. First, we
         #   register the main anatomic image to mre_raw so that the 
-        #   mask is aligned and we can then aligned the other images.
+        #   mask is aligned and we can then align the other images.
         main_anat_seq = 't1_pre_out'
-        self.register_images([main_anat_seq], fixed='mre_raw', resize=same_grid)
+        self.register_images([main_anat_seq], fixed='mre_raw', resize=False)
         self.resize_images([main_anat_seq], size=(256, 256, 32))
         self.segment_image(main_anat_seq, model=model)
+
+        # After getting the segmentation mask, we register again to
+        #   the MRE image so all main sequences and masks are on the same grid
+        self.register_images([main_anat_seq], fixed='mre_raw', resize=same_grid)
         self.register_images(['mre_mask'], fixed='mre_raw', resize=True)
         self.sequences = self.sequences + ['anat_mask', 'mre_mask']
 

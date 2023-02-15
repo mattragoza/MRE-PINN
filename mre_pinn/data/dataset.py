@@ -125,16 +125,18 @@ class MREExample(object):
         example_id = patient.patient_id
         arrays = patient.convert_images()
         sequences = ['t1_pre_in', 't1_pre_out', 't1_pre_water', 't1_pre_fat', 't2']
-        new_dim = xr.DataArray(sequences, dims=['sequence'])
+        new_dim = xr.DataArray(sequences, dims=['component'])
         anat = xr.concat([arrays[a] for a in sequences], dim=new_dim)
-        return MREExample(
+        anat = anat.transpose('x', 'y', 'z', 'component')
+        example = MREExample(
             example_id,
             wave=arrays['wave'],
             mre=arrays['mre'],
             mre_mask=arrays['mre_mask'],
-            anat=anat.rename(sequence='component'),
-            anat_mask=arrays['anat_mask']
+            anat=anat
         )
+        example['anat_mask'] = arrays['anat_mask']
+        return example
 
     @classmethod
     def load_xarrays(cls, xarray_dir, example_id, anat=False, verbose=True):
@@ -146,7 +148,7 @@ class MREExample(object):
         if anat:
             anat = load_xarray_file(example_dir / 'anat.nc', verbose)
             anat_mask = load_xarray_file(example_dir / 'anat_mask.nc', verbose)
-            if 'sequence' in anat:
+            if 'sequence' in anat.coords:
                 anat = anat.rename(sequence='component')
             example = MREExample(example_id, wave, mre, mre_mask, anat=anat)
         else:
