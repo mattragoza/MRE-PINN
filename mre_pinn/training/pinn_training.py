@@ -73,7 +73,7 @@ class MREPINNData(deepxde.data.Data):
         ]
 
     @cache
-    def get_raw_tensors(self, device, patch_size):
+    def get_raw_tensors(self, device):
         example = self.example
 
         # get numpy arrays from data example
@@ -96,7 +96,7 @@ class MREPINNData(deepxde.data.Data):
         return x, u, mu, mu_mask, a
 
     def get_tensors(self, use_mask=True):
-        x, u, mu, mu_mask, a = self.get_raw_tensors(self.device, self.patch_size)
+        x, u, mu, mu_mask, a = self.get_raw_tensors(self.device)
 
         if use_mask: # apply mask and subsample points
             x, u, mu = x[mu_mask], u[mu_mask], mu[mu_mask]
