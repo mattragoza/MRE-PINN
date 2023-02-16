@@ -22,12 +22,12 @@ class MREPINNData(deepxde.data.Data):
         pde_step_iters=5000,
         pde_step_factor=10,
         n_points=4096,
-        patch_size=1,
         device='cuda'
     ):
         self.example = example
         self.pde = pde
 
+        self.anatomical = ('anat' in example)
         if example.wave.field.has_components:
             self.wave_dims = example.wave.field.n_components
         else:
@@ -39,10 +39,6 @@ class MREPINNData(deepxde.data.Data):
         self.pde_step_iters = pde_step_iters
         self.pde_step_factor = pde_step_factor
         self.n_points = n_points
-
-        self.anatomical = ('anat' in example)
-        self.patch_size = patch_size
-
         self.device = device
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
@@ -92,13 +88,9 @@ class MREPINNData(deepxde.data.Data):
         mu = torch.tensor(mu, device=device)
         mu_mask = torch.tensor(mu_mask, device=device, dtype=torch.bool)
 
-        if self.anatomical: # compute anatomical image patches
-            a = example.anat.values.transpose(2, 3, 0, 1) # xyzc → zcxy
+        if self.anatomical:
+            a = example.anat.field.values()
             a = torch.tensor(a, device=device, dtype=torch.float32)
-            k = patch_size
-            a = torch.nn.functional.unfold(a, kernel_size=k, padding=k // 2)
-            a = torch.permute(a, (2, 0, 1)) # z(ck)(xy) → (xy)z(ck)
-            a = a.reshape(-1, a.shape[-1])
         else:
             a = x[:,:0]
         return x, u, mu, mu_mask, a

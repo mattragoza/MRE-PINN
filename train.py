@@ -19,13 +19,12 @@ def train(
     frequency='auto',
     noise_ratio=0.0,
     anatomical=False,
-    patch_size=1,
 
     # pde settings
     pde_name='hetero',
 
     # model settings
-    omega=20,
+    omega=30,
     n_layers=5,
     n_hidden=128,
     activ_fn='s',
@@ -95,8 +94,7 @@ def train(
         pde_step_iters=pde_step_iters,
         pde_step_factor=pde_step_factor,
         pde_init_weight=pde_init_weight,
-        n_points=n_points,
-        patch_size=patch_size
+        n_points=n_points
     )
     model.compile(optimizer='adam', lr=learning_rate, loss=msae_loss)
     model.benchmark(100)
