@@ -126,7 +126,10 @@ class PINN(torch.nn.Module):
 
         # hidden layers
         for i, hidden in enumerate(self.hiddens):
-            y = self.activ_fn(hidden(x))
+            if i == 0:
+                y = torch.sin(hidden(x))
+            else:
+                y = self.activ_fn(hidden(x))
             if self.dense:
                 x = torch.cat([x, y], dim=1)
             else:
