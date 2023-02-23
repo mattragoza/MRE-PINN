@@ -185,7 +185,7 @@ class FieldAccessor(object):
             divergence += component.field.differentiate(coord=d, use_z=use_z, **kwargs)
         return divergence
 
-    def laplacian(self, savgol=True, **kwargs):
+    def laplacian(self, savgol=False, **kwargs):
         if savgol:
             gradient = self.xarray.field.gradient(deriv=2, savgol=True, **kwargs)
             return gradient.sum('gradient')
@@ -197,7 +197,7 @@ class FieldAccessor(object):
         coord = self.xarray.field.spatial_dims[0]
         return self.xarray.field.savgol_filter(coord=coord, deriv=0, **kwargs)
 
-    def differentiate(self, coord, savgol=True, deriv=1, **kwargs):
+    def differentiate(self, coord, savgol=False, deriv=1, **kwargs):
         if savgol:
             return self.xarray.field.savgol_filter(coord=coord, deriv=deriv, **kwargs)
         elif deriv > 1:
