@@ -15,16 +15,13 @@ def eval_fem_baseline(
     frequency,
     component=['x', 'y'],
     hetero=True,
-    hetero2=False,
     u_elem_type='CG-3',
     mu_elem_type='DG-1',
     align_nodes=True,
     mesh_scale=1,
-    savgol_filter=True,
+    savgol_filter=False,
     order=2,
-    kernel_size=3,
-    despeckle=True,
-    threshold=3
+    kernel_size=3
 ):
     print('Evaluating FEM baseline')
     u = example.wave
@@ -39,6 +36,7 @@ def eval_fem_baseline(
             u_z = u.sel(z=z, component=component)
         else:
             u_z = u.sel(z=z)
+
         fem = MREFEM(
             u_z,
             u_elem_type=u_elem_type,
@@ -48,11 +46,10 @@ def eval_fem_baseline(
             savgol_filter=savgol_filter,
             order=order,
             kernel_size=kernel_size,
-            despeckle=despeckle,
-            threshold=threshold,
             verbose=False
         )
-        fem.solve(frequency=frequency, hetero=hetero, hetero2=hetero2)
+        fem.solve(frequency=frequency, hetero=hetero)
+
         # evaluate domain interior
         x_z = u_z.field.spatial_points(reshape=False)
         x_z[ 0,:,0] = x_z[ 1,:,0]
@@ -81,15 +78,13 @@ class MREFEM(object):
     def __init__(
         self,
         wave,
-        u_elem_type='CG-2',
-        mu_elem_type='CG-1',
+        u_elem_type='CG-3',
+        mu_elem_type='DG-1',
         align_nodes=True,
         mesh_scale=1,
         savgol_filter=True,
         order=2,
         kernel_size=3,
-        despeckle=True,
-        threshold=3,
         verbose=True
     ):
         # initialize the mesh
@@ -108,80 +103,39 @@ class MREFEM(object):
         T = dolfinx.fem.TensorFunctionSpace(mesh, u_elem_type, shape=(ndim, ndim))
 
         print_if(verbose, 'Interpolating data into FEM basis')
-        if savgol_filter: # Savitzky-Golay filtering
 
-            # wave image-interpolating function
-            Ku = wave.field.smooth(
-                order=order,
-                kernel_size=kernel_size,
-                use_z=False
-            )
-            self.u_h = dolfinx.fem.Function(V if wave.field.has_components else S)
-            self.u_h.interpolate(create_func_from_data(Ku))
+        # wave image-interpolating function
+        self.u_h = dolfinx.fem.Function(V if wave.field.has_components else S)
+        self.u_h.interpolate(create_func_from_data(wave))
 
-            # Jacobian-interpolating function
-            Ju = wave.field.gradient(
-                savgol=True,
-                order=order,
-                kernel_size=kernel_size,
-                use_z=False
-            )
-            self.Ju_h = dolfinx.fem.Function(T if wave.field.has_components else V)
-            self.Ju_h.interpolate(create_func_from_data(Ju))
-
-            # Laplacian-interpolating function
-            Lu = wave.field.laplacian(
-                savgol=True,
-                order=order,
-                kernel_size=kernel_size,
-                use_z=False
-            )
-            if despeckle:
-                Lu = 1 / filters.outlier_filter(1 / Lu, threshold=threshold)
-
-            self.Lu_h = dolfinx.fem.Function(V if wave.field.has_components else S)
-            self.Lu_h.interpolate(create_func_from_data(Lu))
-        else:
-            # wave image-interpolating function
-            self.u_h = dolfinx.fem.Function(V if wave.field.has_components else S)
-            self.u_h.interpolate(create_func_from_data(wave))
+        # Jacobian-interpolating function
+        Jwave = wave.field.gradient(
+            savgol=savgol_filter, order=order, kernel_size=kernel_size, use_z=False
+        )
+        self.Ju_h = dolfinx.fem.Function(T if wave.field.has_components else V)
+        self.Ju_h.interpolate(create_func_from_data(Jwave))
 
         # trial and test functions
         self.mu_h = ufl.TrialFunction(S)
         self.v_h = ufl.TestFunction(V if wave.field.has_components else S)
 
-    def solve(self, rho=1000, frequency=None, hetero=False, hetero2=False):
+    def solve(self, rho=1000, frequency=None, hetero=False):
         from ufl import grad, div, transpose, inner, dx
+        u_h, Ju_h, mu_h, v_h = self.u_h, self.Ju_h, self.mu_h, self.v_h
 
-        # physical constants
         omega = 2 * np.pi * frequency
 
         # construct bilinear form
-        if hasattr(self, 'Lu_h'): # precomputed derivatives
-            Auv = -self.mu_h * inner(self.Lu_h, self.v_h) * dx
-            if hetero2:
-                Auv -= inner(
-                    grad(self.mu_h),
-                    (self.Ju_h + transpose(self.Ju_h)) * self.v_h
-                ) * dx
-            elif hetero:
-                Auv -= inner(grad(self.mu_h), self.Ju_h * self.v_h) * dx
-        else:
-            Auv = self.mu_h * inner(grad(self.u_h), grad(self.v_h)) * dx
-            if hetero2:
-                Auv -= inner(
-                    grad(self.mu_h),
-                    (grad(self.u_h) + transpose(grad(self.u_h))) * self.v_h
-                ) * dx
-            elif hetero:
-                Auv -= inner(grad(self.mu_h), grad(self.u_h) * self.v_h) * dx
+        A = mu_h * inner(Ju_h, grad(v_h)) * dx
+        if hetero:
+            A -= inner(grad(mu_h), Ju_h * v_h) * dx
 
         # construct inner product
-        bv = rho * omega**2 * inner(self.u_h, self.v_h) * dx
+        b = rho * omega**2 * inner(u_h, v_h) * dx
 
-        # define the variational problem
+        # define and solve the variational problem
         problem = dolfinx.fem.petsc.LinearProblem(
-            Auv, bv, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
+            A, b, bcs=[], petsc_options={'ksp_type': 'lsqr', 'pc_type': 'none'}
         )
         self.mu_pred_h = problem.solve()
 

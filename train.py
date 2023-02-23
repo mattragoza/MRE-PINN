@@ -63,7 +63,7 @@ def train(
     if noise_ratio > 0:
         example.add_gaussian_noise(noise_ratio)
 
-    mre_pinn.baseline.eval_direct_baseline(example, frequency=frequency)
+    mre_pinn.baseline.eval_ahi_baseline(example, frequency=frequency)
     mre_pinn.baseline.eval_fem_baseline(
         example,
         frequency=frequency,

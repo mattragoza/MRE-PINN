@@ -4,11 +4,11 @@ import xarray as xr
 from . import filters
 
 
-def eval_direct_baseline(
+def eval_ahi_baseline(
     example,
     frequency,
     polar=True,
-    savgol_filter=True,
+    savgol_filter=False,
     order=2,
     kernel_size=3,
     despeckle=True,
