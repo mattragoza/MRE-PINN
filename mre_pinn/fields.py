@@ -183,15 +183,15 @@ class FieldAccessor(object):
         for d in self.xarray[dim].values:
             component = self.xarray.sel(**{dim: d})
             divergence += component.field.differentiate(coord=d, use_z=use_z, **kwargs)
-        return divergence
+        return divergence.drop_vars(dim)
 
     def laplacian(self, savgol=False, **kwargs):
         if savgol:
             gradient = self.xarray.field.gradient(deriv=2, savgol=True, **kwargs)
             return gradient.sum('gradient')
         else:
-            gradient = self.xarray.field.gradient(deriv=1, savgol=False, **kwargs)
-            return gradient.field.divergence(dim='gradient', savgol=False, **kwargs)
+            gradient = self.xarray.field.gradient(**kwargs)
+            return gradient.field.divergence(dim='gradient', **kwargs)
 
     def smooth(self, **kwargs):
         coord = self.xarray.field.spatial_dims[0]
