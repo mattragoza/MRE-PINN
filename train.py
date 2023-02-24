@@ -27,7 +27,7 @@ def train(
     omega=30,
     n_layers=5,
     n_hidden=128,
-    activ_fn='s',
+    activ_fn='ss',
     polar_input=False,
 
     # training settings

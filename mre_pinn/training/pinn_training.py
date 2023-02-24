@@ -52,7 +52,7 @@ class MREPINNData(deepxde.data.Data):
 
         u_loss  = loss_fn(u_true, u_pred)
         mu_loss = loss_fn(mu_true, mu_pred)
-        a_loss  = loss_fn(a_true, a_pred)
+        a_loss  = loss_fn(a_true, a_pred) if self.anatomical else u_loss * 0
 
         pde_residual = self.pde(x, u_pred, mu_pred)
         pde_loss = loss_fn(0, pde_residual)
@@ -65,6 +65,7 @@ class MREPINNData(deepxde.data.Data):
             n_steps = pde_iter // self.pde_step_iters
             pde_factor = self.pde_step_factor ** n_steps
             pde_weight = min(pde_weight, self.pde_init_weight * pde_factor)
+
         return [
             u_weight   * u_loss,
             mu_weight  * mu_loss,
@@ -92,7 +93,7 @@ class MREPINNData(deepxde.data.Data):
             a = example.anat.field.values()
             a = torch.tensor(a, device=device, dtype=torch.float32)
         else:
-            a = x[:,:0]
+            a = u[:,:0]
         return x, u, mu, mu_mask, a
 
     def get_tensors(self, use_mask=True):
@@ -102,8 +103,7 @@ class MREPINNData(deepxde.data.Data):
             x, u, mu = x[mu_mask], u[mu_mask], mu[mu_mask]
             sample = torch.randperm(x.shape[0])[:self.n_points]
             x, u, mu = x[sample], u[sample], mu[sample]
-            if self.anatomical:
-                a = a[mu_mask][sample]
+            a = a[mu_mask][sample]
 
         input_ = (x,)
         target = torch.cat([u, mu, a], dim=-1)
@@ -191,7 +191,11 @@ class MREPINNModel(deepxde.Model):
         # get ground truth xarrays
         u_true = self.data.example.wave
         mu_true = self.data.example.mre
-        a_true = self.data.example.anat
+        if 'anat' in self.data.example:
+            a_true = self.data.example.anat
+        else:
+            a_true = u_true * 0
+            a_pred = u_pred * 0
         mu_direct = self.data.example.direct
         mu_fem = self.data.example.fem
         mu_mask = self.data.example.mre_mask
