@@ -82,7 +82,7 @@ class MREFEM(object):
         mu_elem_type='DG-1',
         align_nodes=True,
         mesh_scale=1,
-        savgol_filter=True,
+        savgol_filter=False,
         order=2,
         kernel_size=3,
         verbose=True

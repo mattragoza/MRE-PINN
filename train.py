@@ -23,6 +23,9 @@ def train(
     # pde settings
     pde_name='hetero',
 
+    # baseline settings
+    savgol_filter=False,
+
     # model settings
     omega=30,
     n_layers=5,
@@ -63,12 +66,14 @@ def train(
     if noise_ratio > 0:
         example.add_gaussian_noise(noise_ratio)
 
-    mre_pinn.baseline.eval_ahi_baseline(example, frequency=frequency)
+    mre_pinn.baseline.eval_ahi_baseline(
+        example, frequency=frequency, savgol_filter=savgol_filter
+    )
     mre_pinn.baseline.eval_fem_baseline(
         example,
         frequency=frequency,
         hetero=(pde_name == 'hetero'),
-        hetero2=(pde_name == 'hetero2')
+        savgol_filter=savgol_filter
     )
 
     # define PDE that we want to solve
