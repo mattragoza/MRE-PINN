@@ -10,7 +10,7 @@ dependencies:
   - pandas
   - xarray
   - cudatoolkit=11.3
-  - pytorch::pytorch<1.12
+  - pytorch::pytorch>=1.12.1
   - torchvision
   - deepxde
   - fenics-dolfinx
