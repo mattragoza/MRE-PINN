@@ -575,10 +575,11 @@ COLORS = {
     'black':  (0.0, 0.0, 0.0),
     'white':  (1.0, 1.0, 1.0),
     'red':    (1.0, 0.0, 0.0),
+    'orange': (1.0, 0.5, 0.0),
     'yellow': (1.0, 1.0, 0.0),
     'green':  (0.0, 0.8, 0.0),
     'cyan':   (0.0, 1.0, 1.0),
-    'blue' :  (0.0, 0.0, 1.0),
+    'blue':   (0.0, 0.0, 1.0),
     'purple': (1.0, 0.0, 1.0),
 }
 
@@ -612,14 +613,18 @@ def wave_color_map(n_colors=255):
     )
 
 
-def mre_color_map(n_colors=255):
+def mre_color_map(n_colors=255, symmetric=True):
     colors = [
-        COLORS['yellow'],
-        COLORS['red'],
-        COLORS['black'],
-        COLORS['blue'],
-        COLORS['cyan'],
+        COLORS['black'],  # 0
+        COLORS['blue'],   # 2
+        COLORS['cyan'],   # 4
+        COLORS['green'],  # 6
+        COLORS['yellow'], # 8
+        COLORS['orange'], # 10
+        COLORS['red'],    # 12 (L4)
     ]
+    if symmetric:
+        colors = colors[::-1] + colors[1:]
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='mre', colors=colors, N=n_colors
     )
