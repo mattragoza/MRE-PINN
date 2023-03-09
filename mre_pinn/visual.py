@@ -756,9 +756,9 @@ def subplot_grid(n_rows, n_cols, ax_height, ax_width, cbar_width=0, space=0.3, p
     if cbar_width:
         cbar_ax = fig.add_axes([
             (sum(ax_width) + n_cols * wspace + lpad)/fig_width,
-            bpad/fig_height * 1.1,
+            bpad/fig_height * 1.,
             cbar_width/fig_width,
-            1.0 - (bpad + tpad)/fig_height * 1.1
+            1.0 - (bpad + tpad)/fig_height * 1.
         ])
         return fig, axes, cbar_ax
     else:
