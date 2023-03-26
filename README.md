@@ -2,6 +2,8 @@
 
 Physics-informed networks for elasticity reconstruction in magnetic resonance elastography.
 
+![MRE-PINN examples](MICCAI-2023/images/patient_image_grid.png)
+
 ## Installation
 
 Run the following to setup the conda environment and install it as a Jupyter notebook kernel:
