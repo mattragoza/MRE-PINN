@@ -5,7 +5,7 @@ import xarray as xr
 import torch
 import deepxde
 
-from ..utils import minibatch, as_xarray
+from ..utils import concat, minibatch, as_xarray
 from ..pde import laplacian
 from .losses import msae_loss
 
@@ -27,7 +27,27 @@ class MREPINNData(deepxde.data.Data):
         self.example = example
         self.pde = pde
 
-        self.anatomical = ('anat' in example)
+        metadata = example.metadata
+        self.x_min = torch.tensor(metadata['origin'].wave, dtype=torch.float32)
+        self.x_max = torch.tensor(metadata['limit'].wave, dtype=torch.float32)
+        self.x_loc = torch.tensor(metadata['center'].wave, dtype=torch.float32)
+        self.x_scale = torch.tensor(metadata['extent'].wave, dtype=torch.float32)
+
+        stats = example.describe()
+        self.u_loc = torch.tensor(stats['mean'].wave)
+        self.u_scale = torch.tensor(stats['std'].wave)
+        self.mu_loc = torch.tensor(stats['mean'].mre)
+        self.mu_scale = torch.tensor(stats['std'].mre)
+
+        if 'anat' in example:
+            self.anatomical = True
+            self.a_loc = torch.tensor(stats['mean'].anat)
+            self.a_scale = torch.tensor(stats['std'].anat)
+        else:
+            self.anatomical = False
+            self.a_loc = torch.zeros(0)
+            self.a_scale = torch.zeros(0)
+
         if example.wave.field.has_components:
             self.wave_dims = example.wave.field.n_components
         else:
@@ -75,13 +95,12 @@ class MREPINNData(deepxde.data.Data):
 
     @cache
     def get_raw_tensors(self, device):
-        example = self.example
 
         # get numpy arrays from data example
-        x = example.wave.field.points()
-        u = example.wave.field.values()
-        mu = example.mre.field.values()
-        mu_mask = example.mre_mask.values.reshape(-1)
+        x = self.example.wave.field.points()
+        u = self.example.wave.field.values()
+        mu = self.example.mre.field.values()
+        mu_mask = self.example.mre_mask.values.reshape(-1)
 
         # convert arrays to tensors on appropriate device
         x = torch.tensor(x, device=device, dtype=torch.float32)
@@ -90,13 +109,14 @@ class MREPINNData(deepxde.data.Data):
         mu_mask = torch.tensor(mu_mask, device=device, dtype=torch.bool)
 
         if self.anatomical:
-            a = example.anat.field.values()
+            a = self.example.anat.field.values()
             a = torch.tensor(a, device=device, dtype=torch.float32)
         else:
             a = u[:,:0]
+
         return x, u, mu, mu_mask, a
 
-    def get_tensors(self, use_mask=True):
+    def get_tensors(self, use_mask=True, normalize=True):
         x, u, mu, mu_mask, a = self.get_raw_tensors(self.device)
 
         if use_mask: # apply mask and subsample points
@@ -104,6 +124,12 @@ class MREPINNData(deepxde.data.Data):
             sample = torch.randperm(x.shape[0])[:self.n_points]
             x, u, mu = x[sample], u[sample], mu[sample]
             a = a[mu_mask][sample]
+
+        if normalize: # center and scale
+            x = (x - self.x_loc) / self.x_scale
+            u = (u - self.u_loc) / self.u_scale
+            mu = (mu - self.mu_loc) / self.mu_scale
+            a = (a - self.a_loc) / self.a_scale
 
         input_ = (x,)
         target = torch.cat([u, mu, a], dim=-1)
@@ -164,25 +190,34 @@ class MREPINNModel(deepxde.Model):
         print(f'10k iters time: {iter_time * 1e4 / 60:.2f}m')
         print(f'100k iters time: {iter_time * 1e5 / 3600:.2f}h')
 
-    @minibatch
-    def predict(self, x):
-        x.requires_grad = True
-        u_pred, mu_pred, a_pred = self.net.forward(inputs=(x,))
-        lu_pred = laplacian(u_pred, x)
-        f_trac, f_body = self.data.pde.traction_and_body_forces(x, u_pred, mu_pred)
-        return (
-            u_pred.detach().cpu(),
-            mu_pred.detach().cpu(),
-            a_pred.detach().cpu(),
-            lu_pred.detach().cpu(),
-            f_trac.detach().cpu(),
-            f_body.detach().cpu()
-       )
+    def predict(self, x, batch_size=None):
 
-    def test(self):
+        def predict_batch(x):
+            x.requires_grad = True
+            u_pred, mu_pred, a_pred = self.net.forward(inputs=(x,))
+            u_pred = u_pred * self.data.u_scale + self.data.u_loc
+            mu_pred = mu_pred * self.data.mu_scale + self.data.mu_loc
+            a_pred = a_pred * self.data.a_scale + self.data.a_loc
+            lu_pred = laplacian(u_pred, x)
+            f_trac, f_body = self.data.pde.traction_and_body_forces(
+                x, u_pred, mu_pred
+            )
+            return u_pred, mu_pred, a_pred, lu_pred, f_trac, f_body
+
+        if batch_size is None:
+            return predict_batch(x)
+
+        outputs = []
+        for i in range(0, x.shape[0], batch_size):
+            batch_outputs = predict_batch(x[i:i + batch_size])
+            outputs.append(batch_outputs)
+
+        return map(concat, zip(*outputs))
+
+    def test(self, test_vars='ulpm'):
         
         # get input tensors
-        inputs, targets, aux_vars = self.data.test(use_mask=False)
+        inputs, targets, aux_vars = self.data.test(use_mask=False, normalize=True)
 
         # get model predictions as tensors
         u_pred, mu_pred, a_pred, lu_pred, f_trac, f_body = \
@@ -196,90 +231,107 @@ class MREPINNModel(deepxde.Model):
         else:
             a_true = u_true * 0
             a_pred = u_pred * 0
-        mu_direct = self.data.example.direct
-        mu_fem = self.data.example.fem
         mu_mask = self.data.example.mre_mask
         Lu_true = self.data.example.Lu
 
-        # apply mask level
+        u_shape = u_true.shape
+        mu_shape = mu_true.shape
+        a_shape = a_true.shape
+
+        # adjust mask level
         mask_level = 1.0
         mu_mask = ((mu_mask > 0) - 1) * mask_level + 1
 
-        # convert predicted tensors to xarrays
-        u_shape, mu_shape, a_shape = u_true.shape, mu_true.shape, a_true.shape
+        mu_pred = as_xarray(mu_pred.reshape(mu_shape), like=mu_true)
         u_pred  = as_xarray(u_pred.reshape(u_shape), like=u_true)
-        lu_pred = as_xarray(lu_pred.reshape(u_shape), like=u_true)
         f_trac  = as_xarray(f_trac.reshape(u_shape), like=u_true)
         f_body  = as_xarray(f_body.reshape(u_shape), like=u_true)
-        mu_pred = as_xarray(mu_pred.reshape(mu_shape), like=mu_true)
-        a_pred  = as_xarray(a_pred.reshape(a_shape), like=a_true)
 
-        a_vars = ['a_pred', 'a_diff', 'a_true']
-        a_dim = xr.DataArray(a_vars, dims=['variable'])
-        a = xr.concat([
-            mu_mask * a_pred,
-            mu_mask * (a_true - a_pred),
-            mu_mask * a_true
-        ], dim=a_dim)
-        a.name = 'anatomy'
+        return_vars = []
+        if 'a' in test_vars:
+            a_pred  = as_xarray(a_pred.reshape(a_shape), like=a_true)
+            a_vars = ['a_pred', 'a_diff', 'a_true']
+            a_dim = xr.DataArray(a_vars, dims=['variable'])
+            a = xr.concat([
+                mu_mask * a_pred,
+                mu_mask * (a_true - a_pred),
+                mu_mask * a_true
+            ], dim=a_dim)
+            a.name = 'anatomy'
+            return_vars.append(a)
 
-        u_vars = ['u_pred', 'u_diff', 'u_true']
-        u_dim = xr.DataArray(u_vars, dims=['variable'])
-        u = xr.concat([
-            mu_mask * u_pred,
-            mu_mask * (u_true - u_pred),
-            mu_mask * u_true
-        ], dim=u_dim)
-        u.name = 'wave field'
+        if 'u' in test_vars:
+            u_vars = ['u_pred', 'u_diff', 'u_true']
+            u_dim = xr.DataArray(u_vars, dims=['variable'])
+            u = xr.concat([
+                mu_mask * u_pred,
+                mu_mask * (u_true - u_pred),
+                mu_mask * u_true
+            ], dim=u_dim)
+            u.name = 'wave field'
+            return_vars.append(u)
 
-        lu_vars = ['lu_pred', 'lu_diff', 'Lu_true']
-        lu_dim = xr.DataArray(lu_vars, dims=['variable'])
-        lu = xr.concat([
-            mu_mask * lu_pred,
-            mu_mask * (Lu_true - lu_pred),
-            mu_mask * Lu_true
-        ], dim=lu_dim)
-        lu.name = 'Laplacian'
+        if 'l' in test_vars:
+            lu_pred = as_xarray(lu_pred.reshape(u_shape), like=u_true)
+            lu_vars = ['lu_pred', 'lu_diff', 'Lu_true']
+            lu_dim = xr.DataArray(lu_vars, dims=['variable'])
+            lu = xr.concat([
+                mu_mask * lu_pred,
+                mu_mask * (Lu_true - lu_pred),
+                mu_mask * Lu_true
+            ], dim=lu_dim)
+            lu.name = 'Laplacian'
+            return_vars.append(lu)
 
-        pde_vars = ['pde_grad', 'pde_diff', 'mu_diff']
-        pde_dim = xr.DataArray(pde_vars, dims=['variable'])
-        pde_grad = -((f_trac + f_body) * lu_pred * 2)
-        if 'component' in pde_grad.sizes:
-            pde_grad = pde_grad.sum('component')
-        pde_grad *= self.data.loss_weights[2]
-        mu_diff = mu_true - mu_pred
-        pde = xr.concat([
-            mu_mask * pde_grad,
-            mu_mask * (mu_diff - pde_grad),
-            mu_mask * mu_diff
-        ], dim=pde_dim)
-        pde.name = 'PDE'
+        if 'p' in test_vars:
+            pde_vars = ['pde_grad', 'pde_diff', 'mu_diff']
+            pde_dim = xr.DataArray(pde_vars, dims=['variable'])
+            pde_grad = -((f_trac + f_body) * lu_pred * 2)
+            if 'component' in pde_grad.sizes:
+                pde_grad = pde_grad.sum('component')
+            pde_grad *= self.data.loss_weights[2]
+            mu_diff = mu_true - mu_pred
+            pde = xr.concat([
+                mu_mask * pde_grad,
+                mu_mask * (mu_diff - pde_grad),
+                mu_mask * mu_diff
+            ], dim=pde_dim)
+            pde.name = 'PDE'
+            return_vars.append(pde)
 
-        mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
-        mu_dim = xr.DataArray(mu_vars, dims=['variable'])
-        mu = xr.concat([
-            mu_mask * mu_pred,
-            mu_mask * mu_diff,
-            mu_mask * mu_true
-        ],dim=mu_dim)
-        mu.name = 'elastogram'
+        if 'm' in test_vars:
+            mu_vars = ['mu_pred', 'mu_diff', 'mu_true']
+            mu_dim = xr.DataArray(mu_vars, dims=['variable'])
+            mu = xr.concat([
+                mu_mask * mu_pred,
+                mu_mask * mu_diff,
+                mu_mask * mu_true
+            ],dim=mu_dim)
+            mu.name = 'elastogram'
+            return_vars.append(mu)
 
-        direct_vars = ['direct_pred', 'direct_diff', 'mu_true']
-        direct_dim = xr.DataArray(direct_vars, dims=['variable'])
-        direct = xr.concat([
-            mu_mask * mu_direct,
-            mu_mask * (mu_true - mu_direct),
-            mu_mask * mu_true
-        ], dim=direct_dim)
-        direct.name = 'direct'
+        if 'd' in test_vars:
+            mu_direct = self.data.example.direct
+            direct_vars = ['direct_pred', 'direct_diff', 'mu_true']
+            direct_dim = xr.DataArray(direct_vars, dims=['variable'])
+            direct = xr.concat([
+                mu_mask * mu_direct,
+                mu_mask * (mu_true - mu_direct),
+                mu_mask * mu_true
+            ], dim=direct_dim)
+            direct.name = 'direct'
+            return_vars.append(direct)
 
-        fem_vars = ['fem_pred', 'fem_diff', 'mu_true']
-        fem_dim = xr.DataArray(fem_vars, dims=['variable'])
-        fem = xr.concat([
-            mu_mask * mu_fem,
-            mu_mask * (mu_true - mu_fem),
-            mu_mask * mu_true
-        ], dim=fem_dim)
-        fem.name = 'FEM'
+        if 'f' in test_vars:
+            mu_fem = self.data.example.fem
+            fem_vars = ['fem_pred', 'fem_diff', 'mu_true']
+            fem_dim = xr.DataArray(fem_vars, dims=['variable'])
+            fem = xr.concat([
+                mu_mask * mu_fem,
+                mu_mask * (mu_true - mu_fem),
+                mu_mask * mu_true
+            ], dim=fem_dim)
+            fem.name = 'FEM'
+            return_vars.append(f)
 
-        return 'train', (a, u, lu, pde, mu, direct, fem)
+        return 'train', return_vars

@@ -7,42 +7,32 @@ from .generic import get_activ_fn, ParallelNet
 
 class MREPINN(torch.nn.Module):
 
-    def __init__(self, example, omega, activ_fn='ss', **kwargs):
+    def __init__(self, example, omega0, activ_fn='ss', **kwargs):
         super().__init__()
 
-        metadata = example.metadata
-        x_center = torch.tensor(metadata['center'].wave, dtype=torch.float32)
-        x_extent = torch.tensor(metadata['extent'].wave, dtype=torch.float32)
-
-        stats = example.describe()
-        self.u_loc = torch.tensor(stats['mean'].wave)
-        self.u_scale = torch.tensor(stats['std'].wave)
-        self.mu_loc = torch.tensor(stats['mean'].mre)
-        self.mu_scale = torch.tensor(stats['std'].mre)
-        self.omega = torch.tensor(omega)
+        self.omega0 = omega0
+        self.is_complex = example.wave.field.is_complex
+        self.x_dim = example.wave.field.n_spatial_dims
+        self.u_dim = example.wave.field.n_components
+        self.mu_dim = 1
 
         if 'anat' in example:
-            self.a_loc = torch.tensor(stats['mean'].anat)
-            self.a_scale = torch.tensor(stats['std'].anat)
+            self.a_dim = example.anat.field.n_components
         else:
-            self.a_loc = torch.zeros(0)
-            self.a_scale = torch.zeros(0)
-
-        self.input_loc = x_center
-        self.input_scale = x_extent
+            self.a_dim = 0
 
         self.u_pinn = PINN(
-            n_input=len(self.input_loc),
-            n_output=len(self.u_loc),
-            complex_output=example.wave.field.is_complex,
+            n_input=self.x_dim,
+            n_output=self.u_dim,
+            complex_output=self.is_complex,
             polar_output=False,
             activ_fn=activ_fn[0],
             **kwargs
         )
         self.mu_pinn = PINN(
-            n_input=len(self.input_loc),
-            n_output=len(self.mu_loc) + len(self.a_loc),
-            complex_output=example.mre.field.is_complex,
+            n_input=self.x_dim,
+            n_output=self.mu_dim + self.a_dim,
+            complex_output=self.is_complex,
             polar_output=True,
             activ_fn=activ_fn[1],
             **kwargs
@@ -51,20 +41,11 @@ class MREPINN(torch.nn.Module):
 
     def forward(self, inputs):
         x, = inputs
-        x = (x - self.input_loc) / self.input_scale
-        x = x * self.omega
-
+        x = x * self.omega0
         u_pred = self.u_pinn(x)
-        u_pred = u_pred * self.u_scale + self.u_loc
-
-        mu_a_pred = self.mu_pinn(x)
-        mu_pred, a_pred = (
-            mu_a_pred[:,:len(self.mu_loc)],
-            mu_a_pred[:,len(self.mu_loc):]
+        mu_pred, a_pred = torch.split(
+            self.mu_pinn(x), (self.mu_dim, self.a_dim), dim=1
         )
-        mu_pred = mu_pred * self.mu_scale + self.mu_loc
-        a_pred = a_pred * self.a_scale + self.a_loc
-
         return u_pred, mu_pred, a_pred
 
 
@@ -77,6 +58,7 @@ class PINN(torch.nn.Module):
         n_layers,
         n_hidden,
         activ_fn='s',
+        init_sin=True,
         dense=True,
         polar_input=False,
         complex_output=False,
@@ -104,6 +86,7 @@ class PINN(torch.nn.Module):
             self.output = torch.nn.Linear(n_input, n_output)
 
         self.activ_fn = get_activ_fn(activ_fn)
+        self.init_sin = init_sin
         self.dense = dense
         self.polar_input = polar_input
         self.complex_output = complex_output
@@ -126,7 +109,7 @@ class PINN(torch.nn.Module):
 
         # hidden layers
         for i, hidden in enumerate(self.hiddens):
-            if i == 0:
+            if i == 0 and self.init_sin:
                 y = torch.sin(hidden(x))
             else:
                 y = self.activ_fn(hidden(x))
@@ -156,4 +139,7 @@ class PINN(torch.nn.Module):
                 w_std = np.sqrt(c / n_input)
 
             with torch.no_grad():
-                module.weight.uniform_(-w_std, w_std)
+                if i == 0:
+                    module.weight.uniform_(-w_std, w_std)
+                else:
+                    module.weight.uniform_(-w_std, w_std)

@@ -208,7 +208,11 @@ def gradient(u, x, no_z=True):
         return grad.reshape(x.shape)
     else:
         ones = torch.ones_like(u)
-        grad = torch.autograd.grad(u, x, grad_outputs=ones, create_graph=True)[0]
+        grad = torch.autograd.grad(
+            u, x, grad_outputs=ones, create_graph=True, allow_unused=True
+        )[0]
+        if grad is None:
+            grad = x * 0
         if no_z:
             return grad[...,:2]
         else:
