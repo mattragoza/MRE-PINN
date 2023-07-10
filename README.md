@@ -1,12 +1,12 @@
 # MRE-PINN
 
-Physics-informed networks for elasticity reconstruction in magnetic resonance elastography.
+This repository contains code for the paper *Physics-informed neural networks for tissue elasticity reconstruction in magnetic resonance elastography* which is to be presented at MICCAI 2023.
 
 ![MRE-PINN examples](MICCAI-2023/images/patient_image_grid.png)
 
 ## Installation
 
-Run the following to setup the conda environment and install it as a Jupyter notebook kernel:
+Run the following to setup the conda environment and register it as a Jupyter notebook kernel:
 
 ```bash
 mamba env create --file=environment.yml
@@ -16,14 +16,4 @@ python -m ipykernel install --user --name=MRE-PINN
 
 ## Usage
 
-To download the BIOQIC data sets:
-
-```bash
-sh download_data.sh
-```
-
-To train an MRE-PINN model:
-
-```bash
-python train.py
-```
+This [notebook](TODO) downloads the BIOQIC simulation data set and trains PINNs to reconstruct the elasticity from the displacement field.
