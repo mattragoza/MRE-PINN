@@ -624,7 +624,8 @@ def mre_color_map(n_colors=255, symmetric=True):
         COLORS['red'],    # 12 (L4)
     ]
     if symmetric:
-        colors = colors[::-1] + colors[1:]
+        #colors = colors[::-1] + colors[1:]
+        colors = [COLORS['white']]*6 + colors
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='mre', colors=colors, N=n_colors
     )
