@@ -16,4 +16,4 @@ python -m ipykernel install --user --name=MRE-PINN
 
 ## Usage
 
-This [notebook](MICCAI-2023/MICCAI-2023-simulation-training.ipynb) downloads the BIOQIC simulation data set and trains PINNs to reconstruct a map of shear elasticity from the displacement field.
+This [notebook](notebooks/MICCAI-2023-simulation-training.ipynb) downloads the BIOQIC simulation data set and trains PINNs to reconstruct a map of shear elasticity from the displacement field.
