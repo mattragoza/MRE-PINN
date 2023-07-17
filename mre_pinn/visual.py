@@ -584,6 +584,14 @@ COLORS = {
 }
 
 
+def set_color_palette(palette='tab10'):
+    blue, orange, green, red, purple, brown, pink, gray, yellow, cyan = \
+        sns.color_palette(palette)
+    COLORS.update(**locals())
+
+set_color_palette()
+
+
 def grayscale_color_map(n_colors=255, reverse=False, symmetric=False):
     black = COLORS['black']
     white = COLORS['white']
