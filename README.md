@@ -17,3 +17,5 @@ python -m ipykernel install --user --name=MRE-PINN
 ## Usage
 
 This [notebook](MICCAI-2023/MICCAI-2023-simulation-training.ipynb) downloads the BIOQIC simulation data set and trains PINNs to reconstruct a map of shear elasticity from the displacement field.
+
+The notebook takes roughly 2.5 h to train for 100,000 iterations on an RTX 5000 and uses 2.5 GiB of GPU memory.
