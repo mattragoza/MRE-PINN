@@ -18,11 +18,11 @@ class MREDataset(object):
         self.examples = examples
 
     @classmethod
-    def from_bioqic(cls, bioqic):
+    def from_bioqic(cls, bioqic, **kwargs):
         examples = {}
         example_ids = []
         for frequency in bioqic.arrays.frequency:
-            ex = MREExample.from_bioqic(bioqic, frequency)
+            ex = MREExample.from_bioqic(bioqic, frequency, **kwargs)
             example_ids.append(ex.example_id)
             examples[ex.example_id] = ex
         return MREDataset(example_ids, examples)
@@ -106,9 +106,9 @@ class MREExample(object):
             self.arrays['anat'] = anat.assign_coords(region=mre_mask)
 
     @classmethod
-    def from_bioqic(cls, bioqic, frequency):
+    def from_bioqic(cls, bioqic, frequency, **kwargs):
         example_id = str(frequency.item())
-        arrays = bioqic.arrays.sel(frequency=frequency)
+        arrays = bioqic.arrays.sel(frequency=frequency, **kwargs)
         example = MREExample(
             example_id,
             wave=arrays['wave'],

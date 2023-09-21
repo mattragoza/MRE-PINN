@@ -58,7 +58,7 @@ class PINN(torch.nn.Module):
         n_layers,
         n_hidden,
         activ_fn='s',
-        init_sin=True,
+        init_sin=False,
         dense=True,
         polar_input=False,
         complex_output=False,

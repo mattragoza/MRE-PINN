@@ -210,9 +210,7 @@ class XArrayViewer(Viewer):
             for j in range(n_cols):
                 index, row_label, col_label = self.get_index_and_labels(i, j)
                 x0 = self.coords[x_dim][0]
-                y0 = self.coords[y_dim][0]
                 x_res = self.coords[x_dim][1] - self.coords[x_dim][0]
-                y_res = self.coords[y_dim][1] - self.coords[y_dim][0]
                 if do_line_plot:
                     lines = plot_line_1d(
                         self.axes[i,j],
@@ -228,6 +226,8 @@ class XArrayViewer(Viewer):
                     else:
                         self.artists[i][j] = lines[0]
                 else: # plot image
+                    y0 = self.coords[y_dim][0]
+                    y_res = self.coords[y_dim][1] - self.coords[y_dim][0]
                     image = plot_image_2d(
                         self.axes[i,j],
                         self.array[index],

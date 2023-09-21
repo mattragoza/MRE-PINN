@@ -61,38 +61,6 @@ class MREPINNData(deepxde.data.Data):
         self.n_points = n_points
         self.device = device
 
-    def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        x, = inputs
-        u_true, mu_true, a_true = (
-            targets[...,0:self.wave_dims],
-            targets[...,self.wave_dims:self.wave_dims + 1],
-            targets[...,self.wave_dims + 1:]
-        )
-        u_pred, mu_pred, a_pred = outputs
-
-        u_loss  = loss_fn(u_true, u_pred)
-        mu_loss = loss_fn(mu_true, mu_pred)
-        a_loss  = loss_fn(a_true, a_pred) if self.anatomical else u_loss * 0
-
-        pde_residual = self.pde(x, u_pred, mu_pred)
-        pde_loss = loss_fn(0, pde_residual)
-
-        u_weight, mu_weight, a_weight, pde_weight = self.loss_weights
-        pde_iter = model.train_state.step - self.pde_warmup_iters
-        if pde_iter < 0: # warmup phase (only train wave model)
-            pde_weight = 0
-        else: # PDE training phase
-            n_steps = pde_iter // self.pde_step_iters
-            pde_factor = self.pde_step_factor ** n_steps
-            pde_weight = min(pde_weight, self.pde_init_weight * pde_factor)
-
-        return [
-            u_weight   * u_loss,
-            mu_weight  * mu_loss,
-            a_weight   * a_loss,
-            pde_weight * pde_loss
-        ]
-
     @cache
     def get_raw_tensors(self, device):
 
@@ -135,6 +103,39 @@ class MREPINNData(deepxde.data.Data):
         target = torch.cat([u, mu, a], dim=-1)
         aux_var = ()
         return input_, target, aux_var
+
+    def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
+        x, = inputs
+        u_true, mu_true, a_true = (
+            targets[...,0:self.wave_dims],
+            targets[...,self.wave_dims:self.wave_dims + 1],
+            targets[...,self.wave_dims + 1:]
+        )
+        u_pred, mu_pred, a_pred = outputs
+
+        u_loss  = loss_fn(u_true, u_pred)
+        mu_loss = loss_fn(mu_true, mu_pred)
+        a_loss  = loss_fn(a_true, a_pred) if self.anatomical else u_loss * 0
+
+        pde_residual = self.pde(x, u_pred, mu_pred)
+        pde_loss = loss_fn(0, pde_residual)
+
+        u_weight, mu_weight, a_weight, pde_weight = self.loss_weights
+
+        pde_iter = model.train_state.step - self.pde_warmup_iters
+        if pde_iter < 0: # warmup phase (no PDE loss)
+            pde_weight = 0
+        else: # PDE training phase
+            n_steps = pde_iter // self.pde_step_iters
+            pde_factor = self.pde_step_factor ** n_steps
+            pde_weight = min(pde_weight, self.pde_init_weight * pde_factor)
+
+        return [
+            u_weight   * u_loss,
+            mu_weight  * mu_loss,
+            a_weight   * a_loss,
+            pde_weight * pde_loss
+        ]
 
     def train_next_batch(self, batch_size=None, **kwargs):
         '''
@@ -195,10 +196,12 @@ class MREPINNModel(deepxde.Model):
         def predict_batch(x):
             x.requires_grad = True
             u_pred, mu_pred, a_pred = self.net.forward(inputs=(x,))
+
             u_pred = u_pred * self.data.u_scale + self.data.u_loc
             mu_pred = mu_pred * self.data.mu_scale + self.data.mu_loc
             a_pred = a_pred * self.data.a_scale + self.data.a_loc
-            lu_pred = laplacian(u_pred, x)
+
+            lu_pred = laplacian(u_pred, x) / self.data.x_scale
             f_trac, f_body = self.data.pde.traction_and_body_forces(
                 x, u_pred, mu_pred
             )
@@ -286,15 +289,16 @@ class MREPINNModel(deepxde.Model):
         if 'p' in test_vars:
             pde_vars = ['pde_grad', 'pde_diff', 'mu_diff']
             pde_dim = xr.DataArray(pde_vars, dims=['variable'])
-            pde_grad = -((f_trac + f_body) * lu_pred * 2)
+            pde_residual = f_trac + f_body
+            pde_grad = -(pde_residual * lu_pred * 2)
             if 'component' in pde_grad.sizes:
                 pde_grad = pde_grad.sum('component')
-            pde_grad *= self.data.loss_weights[2]
+            #pde_grad *= self.data.loss_weights[-1]
             mu_diff = mu_true - mu_pred
             pde = xr.concat([
                 mu_mask * pde_grad,
-                mu_mask * (mu_diff - pde_grad),
-                mu_mask * mu_diff
+                mu_mask * pde_grad,
+                mu_mask * pde_grad
             ], dim=pde_dim)
             pde.name = 'PDE'
             return_vars.append(pde)

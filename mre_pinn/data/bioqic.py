@@ -72,8 +72,8 @@ class BIOQICSample(object):
         for arg in args:
             viewer = XArrayViewer(self.arrays[arg], **kwargs)
 
-    def to_dataset(self):
-        return MREDataset.from_bioqic(self)
+    def to_dataset(self, **kwargs):
+        return MREDataset.from_bioqic(self, **kwargs)
 
 
 class BIOQICFEMBox(BIOQICSample):
